@@ -52,11 +52,11 @@ def encontrar_poc(moeda, timeframe, limite):
     return preco_poc
 
 # ==========================================
-# 2. MOTOR DE VIGILÂNCIA (O Verdadeiro Bot)
+# 2. MOTOR DE VIGILÂNCIA TÁTICA
 # ==========================================
 def radar_poc():
     print("📡 O Motor Oculto iniciou a vigiar a Bybit...")
-    enviar_telegram("🟢 O Radar Sniper foi ligado na Europa (Render) com sucesso!")
+    enviar_telegram("🟢 Radar Sniper Atualizado! (1D apenas para Majors, 1W para Altcoins)")
     
     while True:
         for moeda in moedas:
@@ -66,6 +66,7 @@ def radar_poc():
                 preco_atual = exchange.fetch_ticker(moeda)['last']
                 nome_limpo = moeda.split('/')[0] + "USDT.P"
                 
+                # 1. AVALIAÇÃO SEMANAL (Para TODAS as moedas)
                 dist_1w = abs(preco_atual - poc_1w) / preco_atual * 100
                 if dist_1w <= proximidade_pct:
                     chave = f"{moeda}_1W_{poc_1w}"
@@ -73,12 +74,14 @@ def radar_poc():
                         enviar_telegram(f"⚠️ TOQUE POC SEMANAL: {nome_limpo}\nPreço Atual: {preco_atual}\nAlvo: {poc_1w}\nDistância: {round(dist_1w, 2)}%")
                         alertas_enviados[chave] = True
 
-                dist_1d = abs(preco_atual - poc_1d) / preco_atual * 100
-                if dist_1d <= proximidade_pct and dist_1w > proximidade_pct:
-                    chave = f"{moeda}_1D_{poc_1d}"
-                    if chave not in alertas_enviados:
-                        enviar_telegram(f"🔔 Alerta POC 1D: {nome_limpo}\nPreço Atual: {preco_atual}\nAlvo: {poc_1d}\nDistância: {round(dist_1d, 2)}%")
-                        alertas_enviados[chave] = True
+                # 2. AVALIAÇÃO DIÁRIA (Apenas para BTC e ETH)
+                if moeda in ['BTC/USDT:USDT', 'ETH/USDT:USDT']:
+                    dist_1d = abs(preco_atual - poc_1d) / preco_atual * 100
+                    if dist_1d <= proximidade_pct and dist_1w > proximidade_pct:
+                        chave = f"{moeda}_1D_{poc_1d}"
+                        if chave not in alertas_enviados:
+                            enviar_telegram(f"🔔 Alerta POC 1D: {nome_limpo}\nPreço Atual: {preco_atual}\nAlvo: {poc_1d}\nDistância: {round(dist_1d, 2)}%")
+                            alertas_enviados[chave] = True
             except:
                 pass
                 
@@ -87,9 +90,6 @@ def radar_poc():
         time.sleep(900)
 
 if __name__ == '__main__':
-    # 1. Ligar o Radar às escondidas
     threading.Thread(target=radar_poc, daemon=True).start()
-    
-    # 2. Ligar o Site Falso para o Render ficar feliz
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
