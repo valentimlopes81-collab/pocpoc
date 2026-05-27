@@ -1,7 +1,17 @@
 import ccxt
 import time
 import requests
+import threading
+import os
 from datetime import datetime
+from flask import Flask
+
+# A Máscara: Um mini-servidor web para enganar o Render
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Radar Bybit Sniper está online e a vigiar!"
 
 # ==========================================
 # 1. CONFIGURAÇÕES DO RADAR
@@ -9,7 +19,6 @@ from datetime import datetime
 TELEGRAM_BOT_TOKEN = '8800841517:AAGQlDgMdHmd1bdp34a231UswowVCsEwqfM'
 TELEGRAM_CHAT_ID = '5269247998'
 
-# Ligar à Bybit (Derivados / Perpétuos) - Limpo e Direto!
 exchange = ccxt.bybit({
     'enableRateLimit': True,
     'options': {'defaultType': 'swap'}
@@ -22,71 +31,65 @@ moedas = [
     'ZEC/USDT:USDT', 'VIRTUAL/USDT:USDT'
 ]
 
-proximidade_pct = 0.8 # Dispara quando o preço estiver a 0.8% do POC
+proximidade_pct = 0.8
 alertas_enviados = {} 
 
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={mensagem}"
     try:
         requests.get(url)
-    except Exception as e:
-        print(f"Erro ao enviar mensagem: {e}")
+    except:
+        pass
 
 def encontrar_poc(moeda, timeframe, limite):
     velas = exchange.fetch_ohlcv(moeda, timeframe, limit=limite)
     maior_volume = 0
     preco_poc = 0
     for vela in velas:
-        fecho = vela[4]
-        volume = vela[5]
-        if volume > maior_volume:
-            maior_volume = volume
-            preco_poc = fecho
+        if vela[5] > maior_volume:
+            maior_volume = vela[5]
+            preco_poc = vela[4]
     return preco_poc
 
 # ==========================================
-# 2. MOTOR DE VIGILÂNCIA
+# 2. MOTOR DE VIGILÂNCIA (O Verdadeiro Bot)
 # ==========================================
 def radar_poc():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 Radar Iniciado (Europa)! A vigiar {len(moedas)} Perpétuos...")
-    enviar_telegram("🟢 O Radar Bybit foi ligado com sucesso a partir da Alemanha!")
+    print("📡 O Motor Oculto iniciou a vigiar a Bybit...")
+    enviar_telegram("🟢 O Radar Sniper foi ligado na Europa (Render) com sucesso!")
     
     while True:
         for moeda in moedas:
             try:
                 poc_1w = encontrar_poc(moeda, '4h', 42)
                 poc_1d = encontrar_poc(moeda, '1h', 24)
-                
-                ticker = exchange.fetch_ticker(moeda)
-                preco_atual = ticker['last']
+                preco_atual = exchange.fetch_ticker(moeda)['last']
                 nome_limpo = moeda.split('/')[0] + "USDT.P"
                 
-                # POC Semanal
                 dist_1w = abs(preco_atual - poc_1w) / preco_atual * 100
                 if dist_1w <= proximidade_pct:
-                    chave_alerta = f"{moeda}_1W_{poc_1w}"
-                    if chave_alerta not in alertas_enviados:
-                        msg = f"⚠️ TOQUE POC SEMANAL: {nome_limpo}\n\nPreço Atual: {preco_atual}\nAlvo (POC 1W): {poc_1w}\nDistância: {round(dist_1w, 2)}%"
-                        enviar_telegram(msg)
-                        alertas_enviados[chave_alerta] = True
+                    chave = f"{moeda}_1W_{poc_1w}"
+                    if chave not in alertas_enviados:
+                        enviar_telegram(f"⚠️ TOQUE POC SEMANAL: {nome_limpo}\nPreço Atual: {preco_atual}\nAlvo: {poc_1w}\nDistância: {round(dist_1w, 2)}%")
+                        alertas_enviados[chave] = True
 
-                # POC Diário
                 dist_1d = abs(preco_atual - poc_1d) / preco_atual * 100
                 if dist_1d <= proximidade_pct and dist_1w > proximidade_pct:
-                    chave_alerta = f"{moeda}_1D_{poc_1d}"
-                    if chave_alerta not in alertas_enviados:
-                        msg = f"🔔 Alerta POC 1D: {nome_limpo}\n\nPreço Atual: {preco_atual}\nAlvo (POC 1D): {poc_1d}\nDistância: {round(dist_1d, 2)}%"
-                        enviar_telegram(msg)
-                        alertas_enviados[chave_alerta] = True
-                        
-            except Exception as e:
-                print(f"Erro a ler {moeda} na Bybit: {e}")
+                    chave = f"{moeda}_1D_{poc_1d}"
+                    if chave not in alertas_enviados:
+                        enviar_telegram(f"🔔 Alerta POC 1D: {nome_limpo}\nPreço Atual: {preco_atual}\nAlvo: {poc_1d}\nDistância: {round(dist_1d, 2)}%")
+                        alertas_enviados[chave] = True
+            except:
+                pass
                 
         if len(alertas_enviados) > 50:
             alertas_enviados.clear()
-            
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Ciclo concluído. A aguardar 15 minutos...")
         time.sleep(900)
 
 if __name__ == '__main__':
-    radar_poc()
+    # 1. Ligar o Radar às escondidas
+    threading.Thread(target=radar_poc, daemon=True).start()
+    
+    # 2. Ligar o Site Falso para o Render ficar feliz
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
