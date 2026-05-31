@@ -6,15 +6,15 @@ import os
 from datetime import datetime
 from flask import Flask
 
-# A Máscara: Um mini-servidor web para enganar o Render
+# A Máscara: Servidor Web
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Radar Bybit Sniper está online e a vigiar!"
+    return "Radar Bybit Sniper está online com RSI e Volume!"
 
 # ==========================================
-# 1. CONFIGURAÇÕES DO RADAR
+# 1. CONFIGURAÇÕES
 # ==========================================
 TELEGRAM_BOT_TOKEN = '8800841517:AAGQlDgMdHmd1bdp34a231UswowVCsEwqfM'
 TELEGRAM_CHAT_ID = '5269247998'
@@ -25,31 +25,27 @@ exchange = ccxt.bybit({
 })
 
 moedas = [
-    # Majors (Aviso 1D e 1W)
-    'BTC/USDT:USDT', 'ETH/USDT:USDT',
-    
-    # Altcoins Originais
-    'SOL/USDT:USDT', 'HYPE/USDT:USDT', 'BNB/USDT:USDT', 'XRP/USDT:USDT', 
-    'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'LINK/USDT:USDT', 'TAO/USDT:USDT', 
-    'SUI/USDT:USDT', 'LTC/USDT:USDT', 'ZEC/USDT:USDT', 'VIRTUAL/USDT:USDT',
-    
-    # Top Market Cap & Volume Adicionadas (Aviso 1W)
-    'SHIB/USDT:USDT', 'DOT/USDT:USDT', 'TRX/USDT:USDT', 'AVAX/USDT:USDT',
-    'TON/USDT:USDT', 'NEAR/USDT:USDT', 'BCH/USDT:USDT', 'POL/USDT:USDT', 
-    'UNI/USDT:USDT', 'PEPE/USDT:USDT', 'WIF/USDT:USDT', 'APT/USDT:USDT',
-    'RNDR/USDT:USDT', 'ARB/USDT:USDT', 'INJ/USDT:USDT', 'FET/USDT:USDT',
-    'OP/USDT:USDT', 'FIL/USDT:USDT', 'KAS/USDT:USDT', 'TIA/USDT:USDT',
-    'STX/USDT:USDT', 'IMX/USDT:USDT', 'MNT/USDT:USDT', 'XLM/USDT:USDT',
-    'SEI/USDT:USDT', 'GALA/USDT:USDT', 'RUNE/USDT:USDT', 'ATOM/USDT:USDT',
-    'AAVE/USDT:USDT', 'WLD/USDT:USDT', 'ALGO/USDT:USDT', 'QNT/USDT:USDT',
-    'SNX/USDT:USDT', 'GRT/USDT:USDT', 'THETA/USDT:USDT', 'EOS/USDT:USDT',
-    'SAND/USDT:USDT', 'MANA/USDT:USDT', 'FTM/USDT:USDT', 'APE/USDT:USDT',
-    'CHZ/USDT:USDT', 'DYDX/USDT:USDT', 'CRV/USDT:USDT', 'LDO/USDT:USDT',
-    'EGLD/USDT:USDT', 'ENS/USDT:USDT', 'MKR/USDT:USDT', 'BONK/USDT:USDT',
-    'FLOKI/USDT:USDT', 'JUP/USDT:USDT', 'PYTH/USDT:USDT', 'STRK/USDT:USDT',
-    'BOME/USDT:USDT', 'NOT/USDT:USDT', 'ZK/USDT:USDT', 'ZRO/USDT:USDT',
-    'ENA/USDT:USDT', 'ONDO/USDT:USDT', 'OM/USDT:USDT', 'PENDLE/USDT:USDT'
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'HYPE/USDT:USDT',
+    'BNB/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT',
+    'LINK/USDT:USDT', 'TAO/USDT:USDT', 'SUI/USDT:USDT', 'LTC/USDT:USDT',
+    'ZEC/USDT:USDT', 'VIRTUAL/USDT:USDT', 'SHIB/USDT:USDT', 'DOT/USDT:USDT', 
+    'TRX/USDT:USDT', 'AVAX/USDT:USDT', 'TON/USDT:USDT', 'NEAR/USDT:USDT', 
+    'BCH/USDT:USDT', 'POL/USDT:USDT', 'UNI/USDT:USDT', 'PEPE/USDT:USDT', 
+    'WIF/USDT:USDT', 'APT/USDT:USDT', 'RNDR/USDT:USDT', 'ARB/USDT:USDT', 
+    'INJ/USDT:USDT', 'FET/USDT:USDT', 'OP/USDT:USDT', 'FIL/USDT:USDT', 
+    'KAS/USDT:USDT', 'TIA/USDT:USDT', 'STX/USDT:USDT', 'IMX/USDT:USDT', 
+    'MNT/USDT:USDT', 'XLM/USDT:USDT', 'SEI/USDT:USDT', 'GALA/USDT:USDT', 
+    'RUNE/USDT:USDT', 'ATOM/USDT:USDT', 'AAVE/USDT:USDT', 'WLD/USDT:USDT', 
+    'ALGO/USDT:USDT', 'QNT/USDT:USDT', 'SNX/USDT:USDT', 'GRT/USDT:USDT', 
+    'THETA/USDT:USDT', 'EOS/USDT:USDT', 'SAND/USDT:USDT', 'MANA/USDT:USDT', 
+    'FTM/USDT:USDT', 'APE/USDT:USDT', 'CHZ/USDT:USDT', 'DYDX/USDT:USDT', 
+    'CRV/USDT:USDT', 'LDO/USDT:USDT', 'EGLD/USDT:USDT', 'ENS/USDT:USDT', 
+    'MKR/USDT:USDT', 'BONK/USDT:USDT', 'FLOKI/USDT:USDT', 'JUP/USDT:USDT', 
+    'PYTH/USDT:USDT', 'STRK/USDT:USDT', 'BOME/USDT:USDT', 'NOT/USDT:USDT', 
+    'ZK/USDT:USDT', 'ZRO/USDT:USDT', 'ENA/USDT:USDT', 'ONDO/USDT:USDT', 
+    'OM/USDT:USDT', 'PENDLE/USDT:USDT'
 ]
+
 proximidade_pct = 0.8
 alertas_enviados = {} 
 
@@ -60,46 +56,95 @@ def enviar_telegram(mensagem):
     except:
         pass
 
-def encontrar_poc(moeda, timeframe, limite):
-    velas = exchange.fetch_ohlcv(moeda, timeframe, limit=limite)
-    maior_volume = 0
-    preco_poc = 0
-    for vela in velas:
-        if vela[5] > maior_volume:
-            maior_volume = vela[5]
-            preco_poc = vela[4]
-    return preco_poc
+# ==========================================
+# 2. MOTOR DO RSI
+# ==========================================
+def calc_rsi(fechos, periodos=14):
+    if len(fechos) < periodos + 1: return 50
+    ganhos, perdas = [], []
+    for i in range(1, len(fechos)):
+        diff = fechos[i] - fechos[i-1]
+        ganhos.append(max(diff, 0))
+        perdas.append(max(-diff, 0))
+    avg_ganho = sum(ganhos[:periodos]) / periodos
+    avg_perda = sum(perdas[:periodos]) / periodos
+    for i in range(periodos, len(ganhos)):
+        avg_ganho = (avg_ganho * (periodos - 1) + ganhos[i]) / periodos
+        avg_perda = (avg_perda * (periodos - 1) + perdas[i]) / periodos
+    if avg_perda == 0: return 100
+    return 100 - (100 / (1 + (avg_ganho / avg_perda)))
+
+def formatar_volume(vol):
+    if vol >= 1_000_000_000:
+        return f"${vol / 1_000_000_000:.2f}B"
+    elif vol >= 1_000_000:
+        return f"${vol / 1_000_000:.2f}M"
+    elif vol >= 1_000:
+        return f"${vol / 1_000:.2f}K"
+    return f"${vol:.2f}"
+
+def analisar_mercado(moeda):
+    velas_1h = exchange.fetch_ohlcv(moeda, '1h', limit=100)
+    velas_4h = exchange.fetch_ohlcv(moeda, '4h', limit=42)
+    
+    # POC 1D
+    maior_vol_1d, poc_1d = 0, 0
+    for vela in velas_1h[-24:]:
+        if vela[5] > maior_vol_1d:
+            maior_vol_1d, poc_1d = vela[5], vela[4]
+            
+    # POC 1W
+    maior_vol_1w, poc_1w = 0, 0
+    for vela in velas_4h:
+        if vela[5] > maior_vol_1w:
+            maior_vol_1w, poc_1w = vela[5], vela[4]
+            
+    # RSI
+    fechos = [vela[4] for vela in velas_1h]
+    rsi_14 = calc_rsi(fechos, 14)
+    
+    return poc_1d, poc_1w, rsi_14
 
 # ==========================================
-# 2. MOTOR DE VIGILÂNCIA TÁTICA
+# 3. NÚCLEO DO SNIPER
 # ==========================================
 def radar_poc():
-    print("📡 O Motor Oculto iniciou a vigiar a Bybit...")
-    enviar_telegram("🟢 Radar Sniper Atualizado! (1D apenas para Majors, 1W para Altcoins)")
+    print("📡 Sniper com Confluências Ativado...")
+    enviar_telegram("🟢 Radar Atualizado! (Agora com RSI e Volume 24H)")
     
     while True:
         for moeda in moedas:
             try:
-                poc_1w = encontrar_poc(moeda, '4h', 42)
-                poc_1d = encontrar_poc(moeda, '1h', 24)
-                preco_atual = exchange.fetch_ticker(moeda)['last']
+                poc_1d, poc_1w, rsi = analisar_mercado(moeda)
+                
+                # Puxar dados atuais e Volume 24H
+                ticker = exchange.fetch_ticker(moeda)
+                preco_atual = ticker['last']
+                vol_24h_usd = ticker['quoteVolume'] # Volume financeiro em USDT
+                
                 nome_limpo = moeda.split('/')[0] + "USDT.P"
                 
-                # 1. AVALIAÇÃO SEMANAL (Para TODAS as moedas)
+                # Formatar a Confluência
+                estado_rsi = "🟢 Sobrevendido (Forte p/ LONG)" if rsi < 30 else "🔴 Sobrecomprado (Forte p/ SHORT)" if rsi > 70 else "⚪ Neutro"
+                vol_txt = formatar_volume(vol_24h_usd)
+                
+                confluencia_txt = f"\n\n📊 CONFLUÊNCIAS:\n• RSI (1H): {round(rsi, 1)} -> {estado_rsi}\n• Volume 24H: {vol_txt}"
+                
+                # 1. Alerta Semanal (Todas)
                 dist_1w = abs(preco_atual - poc_1w) / preco_atual * 100
                 if dist_1w <= proximidade_pct:
                     chave = f"{moeda}_1W_{poc_1w}"
                     if chave not in alertas_enviados:
-                        enviar_telegram(f"⚠️ TOQUE POC SEMANAL: {nome_limpo}\nPreço Atual: {preco_atual}\nAlvo: {poc_1w}\nDistância: {round(dist_1w, 2)}%")
+                        enviar_telegram(f"⚠️ TOQUE POC SEMANAL: {nome_limpo}\nPreço: {preco_atual}\nAlvo: {poc_1w}\nDistância: {round(dist_1w, 2)}%" + confluencia_txt)
                         alertas_enviados[chave] = True
 
-                # 2. AVALIAÇÃO DIÁRIA (Apenas para BTC e ETH)
+                # 2. Alerta Diário (Só BTC e ETH)
                 if moeda in ['BTC/USDT:USDT', 'ETH/USDT:USDT']:
                     dist_1d = abs(preco_atual - poc_1d) / preco_atual * 100
                     if dist_1d <= proximidade_pct and dist_1w > proximidade_pct:
                         chave = f"{moeda}_1D_{poc_1d}"
                         if chave not in alertas_enviados:
-                            enviar_telegram(f"🔔 Alerta POC 1D: {nome_limpo}\nPreço Atual: {preco_atual}\nAlvo: {poc_1d}\nDistância: {round(dist_1d, 2)}%")
+                            enviar_telegram(f"🔔 Alerta POC 1D: {nome_limpo}\nPreço: {preco_atual}\nAlvo: {poc_1d}\nDistância: {round(dist_1d, 2)}%" + confluencia_txt)
                             alertas_enviados[chave] = True
             except:
                 pass
