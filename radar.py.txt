@@ -6,15 +6,14 @@ import os
 from datetime import datetime
 from flask import Flask
 
-# A Máscara: Servidor Web
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Radar Bybit Sniper está online com RSI e Volume!"
+    return "Sniper Institucional (POC 1W + RSI Divs) Ativo!"
 
 # ==========================================
-# 1. CONFIGURAÇÕES
+# 1. CONFIGURAÇÕES GERAIS
 # ==========================================
 TELEGRAM_BOT_TOKEN = '8800841517:AAGQlDgMdHmd1bdp34a231UswowVCsEwqfM'
 TELEGRAM_CHAT_ID = '5269247998'
@@ -46,7 +45,7 @@ moedas = [
     'OM/USDT:USDT', 'PENDLE/USDT:USDT'
 ]
 
-proximidade_pct = 0.8
+proximidade_alerta_pct = 0.8
 alertas_enviados = {} 
 
 def enviar_telegram(mensagem):
@@ -57,99 +56,157 @@ def enviar_telegram(mensagem):
         pass
 
 # ==========================================
-# 2. MOTOR DO RSI
+# 2. MOTORES MATEMÁTICOS (RSI E DIVERGÊNCIAS)
 # ==========================================
-def calc_rsi(fechos, periodos=14):
-    if len(fechos) < periodos + 1: return 50
+def calc_rsi_array(fechos, periodos=14):
+    rsis = [50] * len(fechos)
+    if len(fechos) < periodos + 1: return rsis
+    
     ganhos, perdas = [], []
     for i in range(1, len(fechos)):
         diff = fechos[i] - fechos[i-1]
         ganhos.append(max(diff, 0))
         perdas.append(max(-diff, 0))
+        
     avg_ganho = sum(ganhos[:periodos]) / periodos
     avg_perda = sum(perdas[:periodos]) / periodos
-    for i in range(periodos, len(ganhos)):
+    
+    for i in range(periodos, len(fechos) - 1):
+        if avg_perda == 0:
+            rsis[i+1] = 100
+        else:
+            rsis[i+1] = 100 - (100 / (1 + (avg_ganho / avg_perda)))
+            
         avg_ganho = (avg_ganho * (periodos - 1) + ganhos[i]) / periodos
         avg_perda = (avg_perda * (periodos - 1) + perdas[i]) / periodos
-    if avg_perda == 0: return 100
-    return 100 - (100 / (1 + (avg_ganho / avg_perda)))
+        
+    return rsis
 
-def formatar_volume(vol):
-    if vol >= 1_000_000_000:
-        return f"${vol / 1_000_000_000:.2f}B"
-    elif vol >= 1_000_000:
-        return f"${vol / 1_000_000:.2f}M"
-    elif vol >= 1_000:
-        return f"${vol / 1_000:.2f}K"
-    return f"${vol:.2f}"
-
-def analisar_mercado(moeda):
-    velas_1h = exchange.fetch_ohlcv(moeda, '1h', limit=100)
-    velas_4h = exchange.fetch_ohlcv(moeda, '4h', limit=42)
+def check_divergencias(velas, rsis):
+    if len(velas) < 30: return False, False
     
-    # POC 1D
-    maior_vol_1d, poc_1d = 0, 0
-    for vela in velas_1h[-24:]:
-        if vela[5] > maior_vol_1d:
-            maior_vol_1d, poc_1d = vela[5], vela[4]
-            
-    # POC 1W
+    # Janelas: Passado (6h a 30h atrás) vs Presente (Últimas 5h)
+    velas_recentes, rsis_recentes = velas[-5:], rsis[-5:]
+    velas_passado, rsis_passado = velas[-30:-5], rsis[-30:-5]
+    
+    # Fundos (Lows) - Bullish Div
+    recent_low = min([v[3] for v in velas_recentes])
+    recent_low_idx = [v[3] for v in velas_recentes].index(recent_low)
+    rsi_recent_low = rsis_recentes[recent_low_idx]
+    
+    past_low = min([v[3] for v in velas_passado])
+    past_low_idx = [v[3] for v in velas_passado].index(past_low)
+    rsi_past_low = rsis_passado[past_low_idx]
+    
+    # Topos (Highs) - Bearish Div
+    recent_high = max([v[2] for v in velas_recentes])
+    recent_high_idx = [v[2] for v in velas_recentes].index(recent_high)
+    rsi_recent_high = rsis_recentes[recent_high_idx]
+    
+    past_high = max([v[2] for v in velas_passado])
+    past_high_idx = [v[2] for v in velas_passado].index(past_high)
+    rsi_past_high = rsis_passado[past_high_idx]
+    
+    # Condições Extremas: Preço faz Lower Low, RSI faz Higher Low e está < 35 (zona extrema)
+    bullish_div = (recent_low < past_low) and (rsi_recent_low > rsi_past_low) and (rsi_recent_low <= 35)
+    bearish_div = (recent_high > past_high) and (rsi_recent_high < rsi_past_high) and (rsi_recent_high >= 65)
+    
+    return bullish_div, bearish_div
+
+def analisar_estrutura_limit(moeda):
+    velas_1h = exchange.fetch_ohlcv(moeda, '1h', limit=100) # Puxa 100 velas para RSI perfeito
+    velas_4h = exchange.fetch_ohlcv(moeda, '4h', limit=42)  # Últimos 7 dias (Para POC 1W)
+    
+    # 1. Encontrar o Bloco Institucional (POC 1W)
     maior_vol_1w, poc_1w = 0, 0
     for vela in velas_4h:
         if vela[5] > maior_vol_1w:
             maior_vol_1w, poc_1w = vela[5], vela[4]
             
-    # RSI
-    fechos = [vela[4] for vela in velas_1h]
-    rsi_14 = calc_rsi(fechos, 14)
+    topo_muralha = poc_1w * (1 + 0.0015)
+    fundo_muralha = poc_1w * (1 - 0.0015)
     
-    return poc_1d, poc_1w, rsi_14
+    # 2. Verificar se é Zona Virgem (48h)
+    is_virgem = True
+    for vela in velas_1h[-48:-2]: 
+        high, low = vela[2], vela[3]
+        if low <= topo_muralha and high >= fundo_muralha:
+            is_virgem = False
+            break
+            
+    # 3. Avaliar Aproximação Agressiva
+    vela_atual = velas_1h[-1]
+    tamanho_atual = abs(vela_atual[2] - vela_atual[3])
+    tamanhos_passados = [abs(v[2] - v[3]) for v in velas_1h[-11:-1]]
+    media_tamanho = sum(tamanhos_passados) / len(tamanhos_passados)
+    is_aproximacao_agressiva = tamanho_atual > (media_tamanho * 2.5)
+    
+    # 4. Cálculo RSI e Divergências (1H)
+    fechos_1h = [v[4] for v in velas_1h]
+    rsis_1h = calc_rsi_array(fechos_1h, 14)
+    rsi_atual = rsis_1h[-1]
+    
+    bullish_div, bearish_div = check_divergencias(velas_1h, rsis_1h)
+    
+    return poc_1w, topo_muralha, fundo_muralha, is_virgem, is_aproximacao_agressiva, rsi_atual, bullish_div, bearish_div
 
 # ==========================================
 # 3. NÚCLEO DO SNIPER
 # ==========================================
 def radar_poc():
-    print("📡 Sniper com Confluências Ativado...")
-    enviar_telegram("🟢 Radar Atualizado! (Agora com RSI e Volume 24H)")
+    print("📡 Sniper Supremo (POC 1W + Divs RSI) Ativado...")
+    enviar_telegram("🟢 Radar Sniper Atualizado!\n\nEstratégia: Limit Orders 1W + Caçador de Divergências 1H")
     
     while True:
         for moeda in moedas:
             try:
-                poc_1d, poc_1w, rsi = analisar_mercado(moeda)
+                poc_1w, topo_muralha, fundo_muralha, is_virgem, is_agressiva, rsi_atual, bull_div, bear_div = analisar_estrutura_limit(moeda)
                 
-                # Puxar dados atuais e Volume 24H
-                ticker = exchange.fetch_ticker(moeda)
-                preco_atual = ticker['last']
-                vol_24h_usd = ticker['quoteVolume'] # Volume financeiro em USDT
+                preco_atual = exchange.fetch_ticker(moeda)['last']
+                nome_limpo = moeda.split('/')[0] + "USDT"
                 
-                nome_limpo = moeda.split('/')[0] + "USDT.P"
+                dist_preco = abs(preco_atual - poc_1w) / preco_atual * 100
                 
-                # Formatar a Confluência
-                estado_rsi = "🟢 Sobrevendido (Forte p/ LONG)" if rsi < 30 else "🔴 Sobrecomprado (Forte p/ SHORT)" if rsi > 70 else "⚪ Neutro"
-                vol_txt = formatar_volume(vol_24h_usd)
-                
-                confluencia_txt = f"\n\n📊 CONFLUÊNCIAS:\n• RSI (1H): {round(rsi, 1)} -> {estado_rsi}\n• Volume 24H: {vol_txt}"
-                
-                # 1. Alerta Semanal (Todas)
-                dist_1w = abs(preco_atual - poc_1w) / preco_atual * 100
-                if dist_1w <= proximidade_pct:
+                if dist_preco <= proximidade_alerta_pct:
                     chave = f"{moeda}_1W_{poc_1w}"
+                    
                     if chave not in alertas_enviados:
-                        enviar_telegram(f"⚠️ TOQUE POC SEMANAL: {nome_limpo}\nPreço: {preco_atual}\nAlvo: {poc_1w}\nDistância: {round(dist_1w, 2)}%" + confluencia_txt)
-                        alertas_enviados[chave] = True
-
-                # 2. Alerta Diário (Só BTC e ETH)
-                if moeda in ['BTC/USDT:USDT', 'ETH/USDT:USDT']:
-                    dist_1d = abs(preco_atual - poc_1d) / preco_atual * 100
-                    if dist_1d <= proximidade_pct and dist_1w > proximidade_pct:
-                        chave = f"{moeda}_1D_{poc_1d}"
-                        if chave not in alertas_enviados:
-                            enviar_telegram(f"🔔 Alerta POC 1D: {nome_limpo}\nPreço: {preco_atual}\nAlvo: {poc_1d}\nDistância: {round(dist_1d, 2)}%" + confluencia_txt)
+                        # Formatação de Sinais Visuais
+                        status_virgem = "✅ Zona Virgem (Intacta 48h)" if is_virgem else "❌ Liquidez já testada"
+                        status_vela = "❌ VELA GIGANTE DETETADA" if is_agressiva else "✅ Aproximação Suave"
+                        
+                        # Definir a Direção da Operação e Stop Loss
+                        if preco_atual > poc_1w:
+                            sl = fundo_muralha * (1 - 0.0015)
+                            direcao = "LONG"
+                            div_text = "🟢 DIV BULLISH DETETADA!" if bull_div else "Nenhuma no momento"
+                        else:
+                            sl = topo_muralha * (1 + 0.0015)
+                            direcao = "SHORT"
+                            div_text = "🔴 DIV BEARISH DETETADA!" if bear_div else "Nenhuma no momento"
+                            
+                        # Só avisa se a zona for minimamente válida (ignora zonas já violadas)
+                        if is_virgem:
+                            msg = f"⭐ SETUP LIMIT 1W: {nome_limpo}\n\n"
+                            msg += f"📍 Alvo Exato (POC): {poc_1w}\n"
+                            msg += f"💰 Preço Atual: {preco_atual} ({round(dist_preco, 2)}% dist.)\n"
+                            msg += f"📉 RSI 1H Atual: {round(rsi_atual, 1)}\n\n"
+                            
+                            msg += f"📋 Checklist Estrutural:\n"
+                            msg += f"• {status_virgem}\n"
+                            msg += f"• {status_vela}\n"
+                            msg += f"• Divergência: {div_text}\n\n"
+                            
+                            msg += f"🛡️ Operação {direcao}:\n"
+                            msg += f"Sugestão Limit: {poc_1w}\n"
+                            msg += f"Stop Loss (Segurança): {round(sl, 4)}"
+                            
+                            enviar_telegram(msg)
                             alertas_enviados[chave] = True
-            except:
+            except Exception as e:
                 pass
                 
-        if len(alertas_enviados) > 50:
+        if len(alertas_enviados) > 30:
             alertas_enviados.clear()
         time.sleep(900)
 
