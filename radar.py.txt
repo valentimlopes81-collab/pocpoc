@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Sniper Institucional (POC 1W + RSI Divs) Ativo!"
+    return "Sniper 30m (Naked POC 1W + RSI Divs) Ativo!"
 
 # ==========================================
 # 1. CONFIGURAÇÕES GERAIS
@@ -56,7 +56,7 @@ def enviar_telegram(mensagem):
         pass
 
 # ==========================================
-# 2. MOTORES MATEMÁTICOS (RSI E DIVERGÊNCIAS)
+# 2. MOTORES MATEMÁTICOS (RSI E DIVERGÊNCIAS 30m)
 # ==========================================
 def calc_rsi_array(fechos, periodos=14):
     rsis = [50] * len(fechos)
@@ -85,7 +85,7 @@ def calc_rsi_array(fechos, periodos=14):
 def check_divergencias(velas, rsis):
     if len(velas) < 30: return False, False
     
-    # Janelas: Passado (6h a 30h atrás) vs Presente (Últimas 5h)
+    # Janelas no 30m: Passado (últimas 15h) vs Presente (Últimas 2.5h)
     velas_recentes, rsis_recentes = velas[-5:], rsis[-5:]
     velas_passado, rsis_passado = velas[-30:-5], rsis[-30:-5]
     
@@ -107,14 +107,14 @@ def check_divergencias(velas, rsis):
     past_high_idx = [v[2] for v in velas_passado].index(past_high)
     rsi_past_high = rsis_passado[past_high_idx]
     
-    # Condições Extremas: Preço faz Lower Low, RSI faz Higher Low e está < 35 (zona extrema)
+    # Condições Extremas
     bullish_div = (recent_low < past_low) and (rsi_recent_low > rsi_past_low) and (rsi_recent_low <= 35)
     bearish_div = (recent_high > past_high) and (rsi_recent_high < rsi_past_high) and (rsi_recent_high >= 65)
     
     return bullish_div, bearish_div
 
 def analisar_estrutura_limit(moeda):
-    velas_1h = exchange.fetch_ohlcv(moeda, '1h', limit=100) # Puxa 100 velas para RSI perfeito
+    velas_30m = exchange.fetch_ohlcv(moeda, '30m', limit=100) # Puxa 100 velas de 30m (últimas 50 horas)
     velas_4h = exchange.fetch_ohlcv(moeda, '4h', limit=42)  # Últimos 7 dias (Para POC 1W)
     
     # 1. Encontrar o Bloco Institucional (POC 1W)
@@ -126,27 +126,27 @@ def analisar_estrutura_limit(moeda):
     topo_muralha = poc_1w * (1 + 0.0015)
     fundo_muralha = poc_1w * (1 - 0.0015)
     
-    # 2. Verificar se é Zona Virgem (48h)
+    # 2. Verificar se é Naked POC / Zona Virgem (48h = 96 velas de 30m)
     is_virgem = True
-    for vela in velas_1h[-48:-2]: 
+    for vela in velas_30m[-96:-2]: 
         high, low = vela[2], vela[3]
         if low <= topo_muralha and high >= fundo_muralha:
             is_virgem = False
             break
             
-    # 3. Avaliar Aproximação Agressiva
-    vela_atual = velas_1h[-1]
+    # 3. Avaliar Aproximação Agressiva (Média das últimas 10 velas de 30m)
+    vela_atual = velas_30m[-1]
     tamanho_atual = abs(vela_atual[2] - vela_atual[3])
-    tamanhos_passados = [abs(v[2] - v[3]) for v in velas_1h[-11:-1]]
-    media_tamanho = sum(tamanhos_passados) / len(tamanhos_passados)
+    tamanhos_passados = [abs(v[2] - v[3]) for v in velas_30m[-11:-1]]
+    media_tamanho = sum(tamanhos_passados) / len(tamanhos_passados) if tamanhos_passados else 1
     is_aproximacao_agressiva = tamanho_atual > (media_tamanho * 2.5)
     
-    # 4. Cálculo RSI e Divergências (1H)
-    fechos_1h = [v[4] for v in velas_1h]
-    rsis_1h = calc_rsi_array(fechos_1h, 14)
-    rsi_atual = rsis_1h[-1]
+    # 4. Cálculo RSI e Divergências (30m)
+    fechos_30m = [v[4] for v in velas_30m]
+    rsis_30m = calc_rsi_array(fechos_30m, 14)
+    rsi_atual = rsis_30m[-1]
     
-    bullish_div, bearish_div = check_divergencias(velas_1h, rsis_1h)
+    bullish_div, bearish_div = check_divergencias(velas_30m, rsis_30m)
     
     return poc_1w, topo_muralha, fundo_muralha, is_virgem, is_aproximacao_agressiva, rsi_atual, bullish_div, bearish_div
 
@@ -154,8 +154,8 @@ def analisar_estrutura_limit(moeda):
 # 3. NÚCLEO DO SNIPER
 # ==========================================
 def radar_poc():
-    print("📡 Sniper Supremo (POC 1W + Divs RSI) Ativado...")
-    enviar_telegram("🟢 Radar Sniper Atualizado!\n\nEstratégia: Limit Orders 1W + Caçador de Divergências 1H")
+    print("📡 Sniper 30m (Naked POC 1W + RSI Divs) Ativado...")
+    enviar_telegram("🟢 Radar Sniper Atualizado!\n\nEstratégia: Naked POC 1W + Divergências RSI no 30m\nCiclo de Alertas: A cada 30 minutos.")
     
     while True:
         for moeda in moedas:
@@ -172,30 +172,30 @@ def radar_poc():
                     
                     if chave not in alertas_enviados:
                         # Formatação de Sinais Visuais
-                        status_virgem = "✅ Zona Virgem (Intacta 48h)" if is_virgem else "❌ Liquidez já testada"
+                        status_virgem = "✅ Naked POC (Intacto há 48h)" if is_virgem else "❌ Liquidez já testada"
                         status_vela = "❌ VELA GIGANTE DETETADA" if is_agressiva else "✅ Aproximação Suave"
                         
                         # Definir a Direção da Operação e Stop Loss
                         if preco_atual > poc_1w:
                             sl = fundo_muralha * (1 - 0.0015)
                             direcao = "LONG"
-                            div_text = "🟢 DIV BULLISH DETETADA!" if bull_div else "Nenhuma no momento"
+                            div_text = "🟢 DIV BULLISH CONFIRMADA!" if bull_div else "Nenhuma no momento"
                         else:
                             sl = topo_muralha * (1 + 0.0015)
                             direcao = "SHORT"
-                            div_text = "🔴 DIV BEARISH DETETADA!" if bear_div else "Nenhuma no momento"
+                            div_text = "🔴 DIV BEARISH CONFIRMADA!" if bear_div else "Nenhuma no momento"
                             
                         # Só avisa se a zona for minimamente válida (ignora zonas já violadas)
                         if is_virgem:
-                            msg = f"⭐ SETUP LIMIT 1W: {nome_limpo}\n\n"
-                            msg += f"📍 Alvo Exato (POC): {poc_1w}\n"
+                            msg = f"⭐ SETUP NAKED POC 30m: {nome_limpo}\n\n"
+                            msg += f"📍 Alvo Exato (POC 1W): {poc_1w}\n"
                             msg += f"💰 Preço Atual: {preco_atual} ({round(dist_preco, 2)}% dist.)\n"
-                            msg += f"📉 RSI 1H Atual: {round(rsi_atual, 1)}\n\n"
+                            msg += f"📉 RSI 30m Atual: {round(rsi_atual, 1)}\n\n"
                             
                             msg += f"📋 Checklist Estrutural:\n"
                             msg += f"• {status_virgem}\n"
                             msg += f"• {status_vela}\n"
-                            msg += f"• Divergência: {div_text}\n\n"
+                            msg += f"• Divergência 30m: {div_text}\n\n"
                             
                             msg += f"🛡️ Operação {direcao}:\n"
                             msg += f"Sugestão Limit: {poc_1w}\n"
@@ -208,7 +208,9 @@ def radar_poc():
                 
         if len(alertas_enviados) > 30:
             alertas_enviados.clear()
-        time.sleep(900)
+            
+        # O Bot agora dorme 30 minutos (1800 segundos) entre rondas
+        time.sleep(1800)
 
 if __name__ == '__main__':
     threading.Thread(target=radar_poc, daemon=True).start()
