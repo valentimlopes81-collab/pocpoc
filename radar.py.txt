@@ -10,10 +10,10 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Sniper 30m v2 — POC Confluência + HTF Ativo!"
+    return "Sniper POC + Divergência RSI | Ativo"
 
 # ==========================================
-# 1. CONFIGURAÇÕES GERAIS
+# 1. CONFIGURAÇÕES
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8800841517:AAGQlDgMdHmd1bdp34a231UswowVCsEwqfM')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID', '5269247998')
@@ -45,12 +45,9 @@ moedas = [
     'OM/USDT:USDT', 'PENDLE/USDT:USDT'
 ]
 
-# ---- Thresholds ----
-PROX_ALERTA_PCT    = 1.5   # Proximidade para alerta tipo 👀 (alargado para mais alertas)
-PROX_SETUP_PCT     = 0.8   # Proximidade para alerta tipo ⭐ (mais exigente)
-CONFLUENCIA_PCT    = 1.0   # Dois POCs são confluentes se estiverem a menos de 1% um do outro
-TTL_APROXIMACAO_H  = 2     # Alerta 👀 não repete durante 2h
-TTL_SETUP_H        = 6     # Alerta ⭐ não repete durante 6h
+PROX_PCT       = 1.5   # % de proximidade ao POC naked
+CONFLUENCIA_PCT = 1.0  # % máxima entre POC 1D e 1W para serem confluentes
+TTL_ALERTA_H   = 4     # Mesmo alerta não repete em 4h
 
 alertas_enviados = {}  # {chave: datetime UTC}
 
@@ -69,29 +66,45 @@ def enviar_telegram(mensagem):
     try:
         resp = requests.get(url, timeout=10)
         if not resp.ok:
-            log(f"⚠️  Telegram HTTP {resp.status_code}: {resp.text[:120]}")
+            log(f"⚠️ Telegram HTTP {resp.status_code}: {resp.text[:120]}")
     except requests.exceptions.RequestException as e:
-        log(f"⚠️  Telegram falhou: {e}")
+        log(f"⚠️ Telegram falhou: {e}")
 
 def limpar_alertas_expirados():
-    agora   = datetime.now(timezone.utc)
-    expired = []
-    for chave, (ts, ttl_h) in alertas_enviados.items():
-        if agora - ts > timedelta(hours=ttl_h):
-            expired.append(chave)
-    for k in expired:
+    cutoff    = datetime.now(timezone.utc) - timedelta(hours=TTL_ALERTA_H)
+    expirados = [k for k, ts in alertas_enviados.items() if ts < cutoff]
+    for k in expirados:
         del alertas_enviados[k]
-    if expired:
-        log(f"🧹 {len(expired)} alertas expirados. Restam: {len(alertas_enviados)}")
-
-def ja_enviado(chave):
-    return chave in alertas_enviados
-
-def marcar_enviado(chave, ttl_h):
-    alertas_enviados[chave] = (datetime.now(timezone.utc), ttl_h)
+    if expirados:
+        log(f"🧹 {len(expirados)} alertas expirados. Restam: {len(alertas_enviados)}")
 
 # ==========================================
-# 3. MOTORES MATEMÁTICOS
+# 3. SINCRONIZAÇÃO — calcula ANTES de dormir
+# ==========================================
+def segundos_para_proxima_vela():
+    """
+    Calcula quantos segundos faltam para o próximo H:00 ou H:30 UTC.
+    Chamado NO INÍCIO do loop — dorme primeiro, corre depois.
+    Assim a ronda começa sempre em cima do fecho da vela,
+    independentemente de quanto tempo demorou a ronda anterior.
+    """
+    agora    = datetime.now(timezone.utc)
+    minuto   = agora.minute
+    segundo  = agora.second
+    microseg = agora.microsecond
+
+    if minuto < 30:
+        espera = (30 - minuto) * 60 - segundo - microseg / 1_000_000
+    else:
+        espera = (60 - minuto) * 60 - segundo - microseg / 1_000_000
+
+    if espera <= 0:
+        espera += 1800
+
+    return espera
+
+# ==========================================
+# 4. MOTORES MATEMÁTICOS
 # ==========================================
 def calc_rsi_array(fechos, periodos=14):
     rsis = [50.0] * len(fechos)
@@ -115,275 +128,164 @@ def calc_rsi_array(fechos, periodos=14):
     return rsis
 
 
-def check_divergencias(velas, rsis):
+def check_divergencia_bullish(velas, rsis):
+    """Novo mínimo de preço + RSI mais alto + RSI <= 35."""
     if len(velas) < 30:
-        return False, False
+        return False
+    lows_rec = [v[3] for v in velas[-5:]]
+    lows_pas = [v[3] for v in velas[-30:-5]]
+    rsis_rec = rsis[-5:]
+    rsis_pas = rsis[-30:-5]
+    r_low    = min(lows_rec); rsi_r = rsis_rec[lows_rec.index(r_low)]
+    p_low    = min(lows_pas); rsi_p = rsis_pas[lows_pas.index(p_low)]
+    return (r_low < p_low) and (rsi_r > rsi_p) and (rsi_r <= 35)
 
-    v_rec, r_rec = velas[-5:],   rsis[-5:]
-    v_pas, r_pas = velas[-30:-5], rsis[-30:-5]
 
-    lows_rec  = [v[3] for v in v_rec]
-    lows_pas  = [v[3] for v in v_pas]
-    r_low     = min(lows_rec);  rsi_r_low = r_rec[lows_rec.index(r_low)]
-    p_low     = min(lows_pas);  rsi_p_low = r_pas[lows_pas.index(p_low)]
-
-    highs_rec = [v[2] for v in v_rec]
-    highs_pas = [v[2] for v in v_pas]
-    r_high    = max(highs_rec); rsi_r_high = r_rec[highs_rec.index(r_high)]
-    p_high    = max(highs_pas); rsi_p_high = r_pas[highs_pas.index(p_high)]
-
-    bull = (r_low  < p_low)  and (rsi_r_low  > rsi_p_low)  and (rsi_r_low  <= 35)
-    bear = (r_high > p_high) and (rsi_r_high < rsi_p_high) and (rsi_r_high >= 65)
-    return bull, bear
+def check_divergencia_bearish(velas, rsis):
+    """Novo máximo de preço + RSI mais baixo + RSI >= 65."""
+    if len(velas) < 30:
+        return False
+    highs_rec = [v[2] for v in velas[-5:]]
+    highs_pas = [v[2] for v in velas[-30:-5]]
+    rsis_rec  = rsis[-5:]
+    rsis_pas  = rsis[-30:-5]
+    r_high    = max(highs_rec); rsi_r = rsis_rec[highs_rec.index(r_high)]
+    p_high    = max(highs_pas); rsi_p = rsis_pas[highs_pas.index(p_high)]
+    return (r_high > p_high) and (rsi_r < rsi_p) and (rsi_r >= 65)
 
 
 def calc_poc(velas):
-    """Devolve o fecho da vela com maior volume numa lista de velas."""
-    melhor_vol, melhor_fecho = 0.0, 0.0
+    """Fecho da vela com maior volume."""
+    poc, vol_max = 0.0, 0.0
     for v in velas:
-        if v[5] > melhor_vol:
-            melhor_vol   = v[5]
-            melhor_fecho = v[4]
-    return melhor_fecho
-
-
-def check_htf_estrutura(velas_4h, preco_atual):
-    """
-    Verifica a estrutura HTF no 4H:
-    — Bias: se o preço está acima/abaixo da EMA 21 das velas 4H
-    — Zona de demanda: último swing low relevante no 4H
-    — Zona de oferta: último swing high relevante no 4H
-    Devolve: bias ('BULL'/'BEAR'/'NEUTRO'), dist_zona_pct, em_zona_htf (bool)
-    """
-    if len(velas_4h) < 25:
-        return 'NEUTRO', 999.0, False
-
-    fechos = [v[4] for v in velas_4h]
-
-    # EMA 21
-    k   = 2 / (21 + 1)
-    ema = fechos[0]
-    for f in fechos[1:]:
-        ema = f * k + ema * (1 - k)
-    bias = 'BULL' if preco_atual > ema else 'BEAR'
-
-    # Swing lows/highs simples: comparar com 3 velas de cada lado
-    lows  = [v[3] for v in velas_4h]
-    highs = [v[2] for v in velas_4h]
-
-    swing_lows, swing_highs = [], []
-    for i in range(3, len(velas_4h) - 3):
-        if lows[i]  == min(lows[i-3:i+4]):  swing_lows.append(lows[i])
-        if highs[i] == max(highs[i-3:i+4]): swing_highs.append(highs[i])
-
-    # Zona de demanda mais recente (swing low mais próximo abaixo do preço)
-    zonas_demanda = [z for z in swing_lows  if z < preco_atual]
-    zonas_oferta  = [z for z in swing_highs if z > preco_atual]
-
-    zona_ref     = max(zonas_demanda) if bias == 'BULL' and zonas_demanda else (
-                   min(zonas_oferta)  if bias == 'BEAR' and zonas_oferta  else None)
-
-    dist_zona    = abs(preco_atual - zona_ref) / preco_atual * 100 if zona_ref else 999.0
-    em_zona_htf  = dist_zona <= 2.0   # Dentro de 2% de uma zona HTF
-
-    return bias, dist_zona, em_zona_htf
-
+        if v[5] > vol_max:
+            vol_max = v[5]
+            poc     = v[4]
+    return poc
 
 # ==========================================
-# 4. ANÁLISE COMPLETA POR MOEDA
+# 5. ANÁLISE POR MOEDA
 # ==========================================
 def analisar(moeda):
-    """
-    Recolhe velas 30m, 4H e 1D.
-    Calcula:
-      - POC semanal  (42 velas 4H ≈ 1 semana)
-      - POC diário   (48 velas 30m ≈ 1 dia)
-      - Confluência entre os dois POCs
-      - Virgindade da zona semanal (últimas 96 velas 30m)
-      - Estrutura HTF (EMA 21 + swing zones no 4H)
-      - RSI + divergências no 30m
-      - Tamanho relativo da vela atual (agressividade)
-    """
+    # Uma única chamada por timeframe — mais rápido, menos API calls
     velas_30m = exchange.fetch_ohlcv(moeda, '30m', limit=100)
-    velas_4h  = exchange.fetch_ohlcv(moeda, '4h',  limit=50)
+    velas_4h  = exchange.fetch_ohlcv(moeda, '4h',  limit=42)
 
-    # --- POCs ---
-    poc_1w = calc_poc(velas_4h[-42:])          # última semana em 4H
-    poc_1d = calc_poc(velas_30m[-48:])         # último dia em 30m
+    preco_atual = velas_30m[-1][4]
 
-    # --- Confluência entre POC diário e semanal ---
-    dist_poc_pct     = abs(poc_1w - poc_1d) / poc_1w * 100 if poc_1w else 999.0
+    # POC semanal (42 velas 4H ≈ 1 semana)
+    poc_1w = calc_poc(velas_4h)
+
+    # POC diário (últimas 48 velas 30m ≈ 1 dia)
+    poc_1d = calc_poc(velas_30m[-48:])
+
+    # Confluência: se os dois POCs estão próximos usa o ponto médio
+    dist_poc_pct      = abs(poc_1w - poc_1d) / poc_1w * 100 if poc_1w else 999.0
     poc_em_confluencia = dist_poc_pct <= CONFLUENCIA_PCT
-    poc_confluente   = (poc_1w + poc_1d) / 2 if poc_em_confluencia else poc_1w  # usa o ponto médio se confluentes
+    poc_ref            = (poc_1w + poc_1d) / 2 if poc_em_confluencia else poc_1w
 
-    zona_top  = poc_confluente * (1 + 0.0015)
-    zona_btm  = poc_confluente * (1 - 0.0015)
+    zona_top = poc_ref * (1 + 0.0015)
+    zona_btm = poc_ref * (1 - 0.0015)
 
-    # --- Virgindade da zona (baseada no POC confluente) ---
-    is_virgem = True
-    for v in velas_30m[-96:-2]:
-        if v[3] <= zona_top and v[2] >= zona_btm:
-            is_virgem = False
-            break
+    # Virgindade: nenhuma das últimas 96 velas tocou a zona (exceto as 2 mais recentes)
+    is_virgem = all(
+        not (v[3] <= zona_top and v[2] >= zona_btm)
+        for v in velas_30m[-96:-2]
+    )
 
-    # --- Agressividade da vela atual ---
-    tamanho_atual  = abs(velas_30m[-1][2] - velas_30m[-1][3])
-    tamanhos_pass  = [abs(v[2] - v[3]) for v in velas_30m[-11:-1]]
-    media_tam      = sum(tamanhos_pass) / len(tamanhos_pass) if tamanhos_pass else 1.0
-    is_agressiva   = tamanho_atual > media_tam * 2.5
-
-    # --- RSI + divergências 30m ---
-    fechos_30m   = [v[4] for v in velas_30m]
-    rsis_30m     = calc_rsi_array(fechos_30m, 14)
-    rsi_atual    = rsis_30m[-1]
-    bull_div, bear_div = check_divergencias(velas_30m, rsis_30m)
-
-    # --- Estrutura HTF (4H) ---
-    preco_atual          = velas_30m[-1][4]
-    bias_htf, dist_zona_htf, em_zona_htf = check_htf_estrutura(velas_4h, preco_atual)
+    # RSI + divergências no 30m
+    fechos_30m = [v[4] for v in velas_30m]
+    rsis_30m   = calc_rsi_array(fechos_30m, 14)
+    rsi_atual  = rsis_30m[-1]
+    bull_div   = check_divergencia_bullish(velas_30m, rsis_30m)
+    bear_div   = check_divergencia_bearish(velas_30m, rsis_30m)
 
     return {
+        'preco_atual':        preco_atual,
+        'poc_ref':            poc_ref,
         'poc_1w':             poc_1w,
         'poc_1d':             poc_1d,
-        'poc_confluente':     poc_confluente,
         'poc_em_confluencia': poc_em_confluencia,
         'dist_poc_pct':       dist_poc_pct,
         'zona_top':           zona_top,
         'zona_btm':           zona_btm,
         'is_virgem':          is_virgem,
-        'is_agressiva':       is_agressiva,
         'rsi_atual':          rsi_atual,
         'bull_div':           bull_div,
         'bear_div':           bear_div,
-        'bias_htf':           bias_htf,
-        'dist_zona_htf':      dist_zona_htf,
-        'em_zona_htf':        em_zona_htf,
-        'preco_atual':        preco_atual,
     }
 
-
 # ==========================================
-# 5. FORMATADORES DE MENSAGEM
+# 6. MENSAGEM
 # ==========================================
-def msg_aproximacao(nome, d):
-    """👀 Tipo 1 — Alerta simples de proximidade ao POC."""
-    direcao = "LONG" if d['preco_atual'] > d['poc_confluente'] else "SHORT"
-    dist    = round(abs(d['preco_atual'] - d['poc_confluente']) / d['preco_atual'] * 100, 2)
-
-    conf_txt = (f"✅ POC 1D ({round(d['poc_1d'],4)}) + POC 1W ({round(d['poc_1w'],4)}) "
-                f"[{round(d['dist_poc_pct'],2)}% apart]") if d['poc_em_confluencia'] else \
-               f"POC 1W: {round(d['poc_1w'],4)} | POC 1D: {round(d['poc_1d'],4)}"
-
-    htf_txt = f"{'🟢' if d['bias_htf']=='BULL' else '🔴'} Bias HTF 4H: {d['bias_htf']}"
-    if d['em_zona_htf']:
-        htf_txt += " ⚡ EM ZONA HTF"
-
-    virgem_txt = "✅ Zona virgem (48h)" if d['is_virgem'] else "⚪ Zona já testada"
-    div_txt    = ("🟢 RSI Bull Div" if d['bull_div'] else
-                  "🔴 RSI Bear Div" if d['bear_div'] else "— Sem divergência")
-
-    msg  = f"👀 APROXIMAÇÃO POC: {nome}\n"
-    msg += f"{'─'*28}\n"
-    msg += f"💰 Preço: {d['preco_atual']}  ({dist}% do POC)\n"
-    msg += f"📍 {conf_txt}\n"
-    msg += f"{htf_txt}\n"
-    msg += f"• {virgem_txt}\n"
-    msg += f"• RSI 30m: {round(d['rsi_atual'],1)}  {div_txt}\n"
-    msg += f"• Direção provável: {direcao}\n"
-    msg += f"⚠️ Aguarda confirmação no gráfico."
-    return msg
-
-
-def msg_setup(nome, d):
-    """⭐ Tipo 2 — Setup completo com confluência + HTF + divergência."""
-    direcao = "LONG" if d['preco_atual'] > d['poc_confluente'] else "SHORT"
+def formatar_mensagem(nome, d, direcao):
     emoji   = "🟢" if direcao == "LONG" else "🔴"
+    div_txt = "🟢 BULLISH" if d['bull_div'] else "🔴 BEARISH"
+    sl      = d['zona_btm'] * (1 - 0.002) if direcao == "LONG" else d['zona_top'] * (1 + 0.002)
+    dist    = round(abs(d['preco_atual'] - d['poc_ref']) / d['preco_atual'] * 100, 2)
+    conf_txt = (f"✅ 1D+1W confluentes ({round(d['dist_poc_pct'], 2)}%)"
+                if d['poc_em_confluencia'] else "POC 1W")
 
-    sl = d['zona_btm'] * (1 - 0.002) if direcao == "LONG" else d['zona_top'] * (1 + 0.002)
-
-    div_txt = ("🟢 BULLISH CONFIRMADA" if d['bull_div'] else
-               "🔴 BEARISH CONFIRMADA" if d['bear_div'] else "⚪ Sem divergência")
-
-    htf_zona = "⚡ EM ZONA DE ESTRUTURA HTF" if d['em_zona_htf'] else f"({round(d['dist_zona_htf'],2)}% da zona HTF)"
-
-    msg  = f"⭐ SETUP CONFLUÊNCIA: {nome}\n"
-    msg += f"{'─'*28}\n"
-    msg += f"{emoji} Direção: {direcao}\n\n"
-    msg += f"📍 POC Confluente: {round(d['poc_confluente'],6)}\n"
-    msg += f"   └ POC 1W: {round(d['poc_1w'],4)}  |  POC 1D: {round(d['poc_1d'],4)}\n"
-    msg += f"   └ Distância entre POCs: {round(d['dist_poc_pct'],2)}%\n\n"
-    msg += f"📊 Estrutura HTF (4H):\n"
-    msg += f"   └ Bias: {d['bias_htf']}  {htf_zona}\n\n"
-    msg += f"📉 RSI 30m: {round(d['rsi_atual'],1)}\n"
-    msg += f"   └ Divergência: {div_txt}\n\n"
-    msg += f"🛡️ {'✅ Zona virgem' if d['is_virgem'] else '⚪ Zona já testada'}\n"
-    msg += f"{'❌ VELA AGRESSIVA — cuidado' if d['is_agressiva'] else '✅ Aproximação suave'}\n\n"
-    msg += f"💰 Preço atual: {d['preco_atual']}\n"
-    msg += f"🎯 Entry limit: {round(d['poc_confluente'],6)}\n"
-    msg += f"🛑 Stop Loss:   {round(sl,6)}"
+    msg  = f"⭐ NAKED POC + DIV RSI: {nome}\n"
+    msg += f"{'─' * 30}\n"
+    msg += f"{emoji} {direcao}  |  {conf_txt}\n\n"
+    msg += f"📍 POC: {round(d['poc_ref'], 6)}  ({dist}% dist.)\n"
+    msg += f"   1W: {round(d['poc_1w'], 4)}  |  1D: {round(d['poc_1d'], 4)}\n\n"
+    msg += f"📉 RSI 30m: {round(d['rsi_atual'], 1)}  →  Div {div_txt}\n"
+    msg += f"{'✅ Zona virgem' if d['is_virgem'] else '⚪ Zona já testada'}\n\n"
+    msg += f"💰 Preço:  {d['preco_atual']}\n"
+    msg += f"🎯 Entry:  {round(d['poc_ref'], 6)}\n"
+    msg += f"🛑 Stop:   {round(sl, 6)}"
     return msg
 
-
 # ==========================================
-# 6. NÚCLEO DO RADAR
+# 7. NÚCLEO DO RADAR
 # ==========================================
 def radar_poc():
-    log("📡 Sniper v2 Ativo — POC Confluência + HTF")
+    log("📡 Sniper Ativo — POC Naked + Div RSI")
     enviar_telegram(
-        "🟢 Sniper v2 Ativo!\n\n"
-        "📡 Dois tipos de alerta:\n"
-        "👀 APROXIMAÇÃO — preço perto do POC (confirmas tu)\n"
-        "⭐ SETUP — confluência POC 1D+1W + estrutura HTF\n\n"
-        "Rondas: exatas às H:00 e H:30 (UTC)"
+        "🟢 Sniper Ativo!\n\n"
+        "Estratégia: Naked POC (1W+1D) + Divergência RSI\n"
+        "Alertas: no fecho de cada vela 30m (H:00 e H:30 UTC)"
     )
 
     while True:
-        log(f"🔍 Ronda — {len(moedas)} moedas...")
+        # ── Dorme PRIMEIRO até ao próximo fecho ──────────────────
+        espera = segundos_para_proxima_vela()
+        proxima = datetime.now(timezone.utc) + timedelta(seconds=espera)
+        log(f"💤 Próxima ronda: {proxima.strftime('%H:%M:%S')} UTC  ({int(espera)}s)")
+        time.sleep(espera)
+
+        # ── Corre a ronda logo após o fecho ──────────────────────
+        hora_ronda = datetime.now(timezone.utc).strftime('%H:%M UTC')
+        log(f"🔍 Ronda {hora_ronda} — {len(moedas)} moedas...")
         limpar_alertas_expirados()
-        erros = 0
-        tipo1 = 0
-        tipo2 = 0
+
+        enviados, erros = 0, 0
 
         for moeda in moedas:
             try:
-                d           = analisar(moeda)
-                nome        = moeda.split('/')[0] + "USDT"
-                preco       = d['preco_atual']
-                poc         = d['poc_confluente']
-                dist        = abs(preco - poc) / preco * 100
-
-                # ── TIPO 2: Setup completo ──────────────────────────────
-                # Condições: dentro de PROX_SETUP_PCT + confluência POCs + bias HTF correto +
-                #            (divergência OU zona HTF) + zona não agressiva
+                d       = analisar(moeda)
+                nome    = moeda.split('/')[0] + "USDT"
+                preco   = d['preco_atual']
+                poc     = d['poc_ref']
+                dist    = abs(preco - poc) / preco * 100
                 direcao = "LONG" if preco > poc else "SHORT"
-                bias_ok = (direcao == "LONG"  and d['bias_htf'] == 'BULL') or \
-                          (direcao == "SHORT" and d['bias_htf'] == 'BEAR')
-                div_ok  = d['bull_div'] or d['bear_div']
 
-                if (dist <= PROX_SETUP_PCT
-                        and d['poc_em_confluencia']
-                        and bias_ok
-                        and (div_ok or d['em_zona_htf'])
-                        and not d['is_agressiva']):
+                # Condições obrigatórias:
+                # 1. Preço perto do POC naked
+                # 2. Zona não mitigada (virgem)
+                # 3. Divergência RSI coerente com a direção
+                div_ok = (direcao == "LONG" and d['bull_div']) or \
+                         (direcao == "SHORT" and d['bear_div'])
 
-                    chave2 = f"{moeda}_SETUP_{round(poc, 4)}"
-                    if not ja_enviado(chave2):
-                        enviar_telegram(msg_setup(nome, d))
-                        marcar_enviado(chave2, TTL_SETUP_H)
-                        tipo2 += 1
-                        log(f"  ⭐ SETUP: {nome} @ {round(poc,4)} ({direcao})")
-
-                # ── TIPO 1: Aproximação simples ─────────────────────────
-                # Condições: dentro de PROX_ALERTA_PCT
-                # Não envia se já foi enviado um SETUP para o mesmo POC nesta janela
-                elif dist <= PROX_ALERTA_PCT:
-                    chave1 = f"{moeda}_APROX_{round(poc, 4)}"
-                    chave2 = f"{moeda}_SETUP_{round(poc, 4)}"
-                    if not ja_enviado(chave1) and not ja_enviado(chave2):
-                        enviar_telegram(msg_aproximacao(nome, d))
-                        marcar_enviado(chave1, TTL_APROXIMACAO_H)
-                        tipo1 += 1
-                        log(f"  👀 APROX: {nome} @ {round(poc,4)} ({dist:.2f}%)")
+                if dist <= PROX_PCT and d['is_virgem'] and div_ok:
+                    chave = f"{moeda}_{round(poc, 4)}"
+                    if chave not in alertas_enviados:
+                        enviar_telegram(formatar_mensagem(nome, d, direcao))
+                        alertas_enviados[chave] = datetime.now(timezone.utc)
+                        enviados += 1
+                        log(f"  ⭐ {nome} {direcao} @ {round(poc,4)} RSI:{round(d['rsi_atual'],1)}")
 
             except ccxt.NetworkError as e:
                 erros += 1
@@ -397,24 +299,10 @@ def radar_poc():
 
             time.sleep(0.3)
 
-        log(f"✔️  Ronda terminada — ⭐{tipo2} setups, 👀{tipo1} aproximações, ❌{erros} erros")
-
-        # Sincronização UTC à próxima vela de 30m
-        agora          = datetime.now(timezone.utc)
-        min_atual      = agora.minute
-        seg_atual      = agora.second
-        microseg       = agora.microsecond
-        segundos_espera = ((30 - min_atual) if min_atual < 30 else (60 - min_atual)) * 60 - seg_atual
-        segundos_espera -= microseg / 1_000_000
-        if segundos_espera <= 0:
-            segundos_espera += 1800
-
-        log(f"💤 A dormir {int(segundos_espera)}s até à próxima vela...")
-        time.sleep(segundos_espera)
-
+        log(f"✔️  Ronda terminada — ⭐{enviados} alertas, ❌{erros} erros")
 
 # ==========================================
-# 7. ARRANQUE
+# 8. ARRANQUE
 # ==========================================
 if __name__ == '__main__':
     threading.Thread(target=radar_poc, daemon=True).start()
