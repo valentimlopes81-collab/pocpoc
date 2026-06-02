@@ -19,7 +19,6 @@ exchange = ccxt.bybit({
     'options': {'defaultType': 'swap'}
 })
 
-# Moedas que queres seguir — o bot resolve automaticamente o símbolo correto no Bybit
 MOEDAS_DESEJADAS = [
     'BTC', 'ETH', 'SOL', 'HYPE', 'BNB', 'XRP', 'DOGE', 'ADA',
     'LINK', 'TAO', 'SUI', 'LTC', 'ZEC', 'VIRTUAL', 'SHIB', 'DOT',
@@ -36,25 +35,19 @@ MOEDAS_DESEJADAS = [
 PROX_PCT           = 1.5
 CONFLUENCIA_PCT    = 1.0
 TTL_ALERTA_H       = 4
-SLEEP_ENTRE_MOEDAS = 2.0
+SLEEP_ENTRE_MOEDAS = 0.2  # Reduzido para o bot ser rápido!
 
 alertas_enviados = {}
 thread_radar     = None
-moedas_validadas = []   # preenchido no arranque com símbolos reais do Bybit
+moedas_validadas = []   
 
 # ==========================================
 # 2. RESOLUÇÃO AUTOMÁTICA DE SÍMBOLOS
 # ==========================================
 def resolver_simbolos():
-    """
-    Carrega todos os mercados do Bybit e encontra o símbolo correto
-    para cada moeda desejada. Trata automaticamente casos especiais
-    como 1000SHIB, 1000PEPE, RENDER (ex-RNDR), etc.
-    """
     log("📋 A carregar mercados do Bybit...")
     mercados = exchange.load_markets()
 
-    # Índice: base → símbolo ccxt (apenas perpetuals USDT ativos)
     indice = {}
     for simbolo, info in mercados.items():
         if info.get('swap') and info.get('quote') == 'USDT' and info.get('active'):
@@ -67,24 +60,15 @@ def resolver_simbolos():
 
     for moeda in MOEDAS_DESEJADAS:
         m = moeda.upper()
-
         if m in indice:
             validas.append(indice[m])
-        # Casos especiais: meme coins com preço baixo usam prefixo 1000
         elif f'1000{m}' in indice:
             validas.append(indice[f'1000{m}'])
-            log(f"  ℹ️  {m} → usa símbolo 1000{m}")
-        # RNDR foi renomeado para RENDER no Bybit
         elif m == 'RNDR' and 'RENDER' in indice:
             validas.append(indice['RENDER'])
-            log(f"  ℹ️  RNDR → usa símbolo RENDER")
         else:
             invalidas.append(m)
 
-    if invalidas:
-        log(f"⚠️  Não encontradas no Bybit: {invalidas}")
-        enviar_telegram(f"⚠️ {len(invalidas)} moedas não encontradas no Bybit:\n{', '.join(invalidas)}")
-    
     log(f"✅ {len(validas)}/{len(MOEDAS_DESEJADAS)} moedas prontas.")
     return validas
 
@@ -101,19 +85,15 @@ def enviar_telegram(mensagem):
         f"?chat_id={TELEGRAM_CHAT_ID}&text={requests.utils.quote(mensagem)}"
     )
     try:
-        resp = requests.get(url, timeout=10)
-        if not resp.ok:
-            log(f"⚠️ Telegram HTTP {resp.status_code}: {resp.text[:120]}")
-    except requests.exceptions.RequestException as e:
-        log(f"⚠️ Telegram falhou: {e}")
+        requests.get(url, timeout=10)
+    except:
+        pass
 
 def limpar_alertas_expirados():
     cutoff    = datetime.now(timezone.utc) - timedelta(hours=TTL_ALERTA_H)
     expirados = [k for k, ts in alertas_enviados.items() if ts < cutoff]
     for k in expirados:
         del alertas_enviados[k]
-    if expirados:
-        log(f"🧹 {len(expirados)} alertas expirados. Restam: {len(alertas_enviados)}")
 
 # ==========================================
 # 4. SINCRONIZAÇÃO
@@ -130,46 +110,60 @@ def segundos_para_proxima_vela():
     return espera
 
 # ==========================================
-# 5. MOTORES MATEMÁTICOS
+# 5. MOTORES MATEMÁTICOS (CORRIGIDOS)
 # ==========================================
 def calc_rsi_array(fechos, periodos=14):
     rsis = [50.0] * len(fechos)
-    if len(fechos) < periodos + 1:
+    if len(fechos) <= periodos:
         return rsis
-    ganhos, perdas = [], []
-    for i in range(1, len(fechos)):
-        diff = fechos[i] - fechos[i - 1]
-        ganhos.append(max(diff, 0.0))
-        perdas.append(max(-diff, 0.0))
+
+    # Cálculo perfeito e sem desfasamento do RSI
+    ganhos = [max(fechos[i] - fechos[i-1], 0) for i in range(1, len(fechos))]
+    perdas = [max(fechos[i-1] - fechos[i], 0) for i in range(1, len(fechos))]
+
     avg_g = sum(ganhos[:periodos]) / periodos
     avg_p = sum(perdas[:periodos]) / periodos
-    for i in range(periodos, len(fechos) - 1):
-        rsis[i + 1] = 100.0 if avg_p == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_p))
+
+    rsis[periodos] = 100.0 if avg_p == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_p))
+
+    for i in range(periodos, len(ganhos)):
         avg_g = (avg_g * (periodos - 1) + ganhos[i]) / periodos
         avg_p = (avg_p * (periodos - 1) + perdas[i]) / periodos
+        rsis[i + 1] = 100.0 if avg_p == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_p))
+        
     return rsis
 
 def check_divergencia_bullish(velas, rsis):
-    if len(velas) < 30:
-        return False
+    if len(velas) < 30: return False
     lows_rec = [v[3] for v in velas[-5:]]
     lows_pas = [v[3] for v in velas[-30:-5]]
     rsis_rec = rsis[-5:]
     rsis_pas = rsis[-30:-5]
-    r_low = min(lows_rec); rsi_r = rsis_rec[lows_rec.index(r_low)]
-    p_low = min(lows_pas); rsi_p = rsis_pas[lows_pas.index(p_low)]
-    return (r_low < p_low) and (rsi_r > rsi_p) and (rsi_r <= 35)
+    
+    r_low = min(lows_rec)
+    rsi_r = rsis_rec[lows_rec.index(r_low)]
+    
+    p_low = min(lows_pas)
+    rsi_p = rsis_pas[lows_pas.index(p_low)]
+    
+    # Ajustei para <= 40 para apanhar mais movimentos de exaustão no 30m
+    return (r_low < p_low) and (rsi_r > rsi_p) and (rsi_r <= 40)
 
 def check_divergencia_bearish(velas, rsis):
-    if len(velas) < 30:
-        return False
+    if len(velas) < 30: return False
     highs_rec = [v[2] for v in velas[-5:]]
     highs_pas = [v[2] for v in velas[-30:-5]]
     rsis_rec  = rsis[-5:]
     rsis_pas  = rsis[-30:-5]
-    r_high = max(highs_rec); rsi_r = rsis_rec[highs_rec.index(r_high)]
-    p_high = max(highs_pas); rsi_p = rsis_pas[highs_pas.index(p_high)]
-    return (r_high > p_high) and (rsi_r < rsi_p) and (rsi_r >= 65)
+    
+    r_high = max(highs_rec)
+    rsi_r = rsis_rec[highs_rec.index(r_high)]
+    
+    p_high = max(highs_pas)
+    rsi_p = rsis_pas[highs_pas.index(p_high)]
+    
+    # Ajustei para >= 60
+    return (r_high > p_high) and (rsi_r < rsi_p) and (rsi_r >= 60)
 
 def calc_poc(velas):
     poc, vol_max = 0.0, 0.0
@@ -186,7 +180,7 @@ def analisar(moeda):
     velas_30m = exchange.fetch_ohlcv(moeda, '30m', limit=100)
     velas_4h  = exchange.fetch_ohlcv(moeda, '4h',  limit=42)
 
-    preco_atual = velas_30m[-1][4]
+    preco_atual = exchange.fetch_ticker(moeda)['last']
     poc_1w      = calc_poc(velas_4h)
     poc_1d      = calc_poc(velas_30m[-48:])
 
@@ -205,6 +199,7 @@ def analisar(moeda):
     fechos_30m = [v[4] for v in velas_30m]
     rsis_30m   = calc_rsi_array(fechos_30m, 14)
     rsi_atual  = rsis_30m[-1]
+    
     bull_div   = check_divergencia_bullish(velas_30m, rsis_30m)
     bear_div   = check_divergencia_bearish(velas_30m, rsis_30m)
 
@@ -232,7 +227,7 @@ def formatar_mensagem(nome, d, direcao):
     sl      = d['zona_btm'] * (1 - 0.002) if direcao == "LONG" else d['zona_top'] * (1 + 0.002)
     dist    = round(abs(d['preco_atual'] - d['poc_ref']) / d['preco_atual'] * 100, 2)
     conf_txt = (f"✅ 1D+1W confluentes ({round(d['dist_poc_pct'], 2)}%)"
-                if d['poc_em_confluencia'] else "POC 1W")
+                if d['poc_em_confluencia'] else "POC 1W Isolado")
 
     msg  = f"⭐ NAKED POC + DIV RSI: {nome}\n"
     msg += f"{'─' * 30}\n"
@@ -253,24 +248,21 @@ def radar_poc():
     global moedas_validadas
     log("📡 Radar arrancou")
 
-    # Resolve símbolos reais no arranque
     moedas_validadas = resolver_simbolos()
-
-    enviar_telegram(
-        f"🟢 Sniper Ativo!\n\n"
-        f"✅ {len(moedas_validadas)} moedas carregadas\n"
-        f"Estratégia: Naked POC (1W+1D) + Divergência RSI\n"
-        f"Alertas: fecho de cada vela 30m (H:00 e H:30 UTC)"
-    )
+    enviar_telegram("🟢 Sniper Ativo! Foco: Naked POC + Divs RSI Corrigidas (30m).")
 
     while True:
         espera  = segundos_para_proxima_vela()
         proxima = (datetime.now(timezone.utc) + timedelta(seconds=espera)).strftime('%H:%M:%S')
         log(f"💤 Próxima ronda: {proxima} UTC  ({int(espera)}s)")
+        
         time.sleep(espera)
+        
+        # O SEGREDO: Dá 5 segundos à corretora para ela gerar a vela nova corretamente
+        time.sleep(5)
 
         hora_ronda = datetime.now(timezone.utc).strftime('%H:%M UTC')
-        log(f"🔍 Ronda {hora_ronda} — {len(moedas_validadas)} moedas...")
+        log(f"🔍 Ronda {hora_ronda} — A analisar {len(moedas_validadas)} moedas...")
         limpar_alertas_expirados()
 
         enviados, erros = 0, 0
@@ -281,12 +273,12 @@ def radar_poc():
                 nome    = moeda.split('/')[0] + "USDT"
                 poc     = d['poc_ref']
                 dist    = abs(d['preco_atual'] - poc) / d['preco_atual'] * 100
+                
                 direcao = "LONG" if d['preco_atual'] > poc else "SHORT"
+                div_ok  = (direcao == "LONG"  and d['bull_div']) or \
+                          (direcao == "SHORT" and d['bear_div'])
 
-                div_ok = (direcao == "LONG"  and d['bull_div']) or \
-                         (direcao == "SHORT" and d['bear_div'])
-
-                # Debug: mostra o estado de cada condição
+                # Log fantástico que tu criaste para veres a máquina a pensar
                 log(f"  {nome} | dist:{round(dist,2)}% virgem:{'✅' if d['is_virgem'] else '❌'} div:{'✅' if div_ok else '❌'} RSI:{round(d['rsi_atual'],1)}")
 
                 if dist <= PROX_PCT and d['is_virgem'] and div_ok:
@@ -295,18 +287,11 @@ def radar_poc():
                         enviar_telegram(formatar_mensagem(nome, d, direcao))
                         alertas_enviados[chave] = datetime.now(timezone.utc)
                         enviados += 1
-                        log(f"  ⭐ {nome} {direcao} @ {round(poc,4)} RSI:{round(d['rsi_atual'],1)}")
+                        log(f"  ⭐ ALERTA ENVIADO: {nome} {direcao}")
 
-            except ccxt.NetworkError as e:
-                erros += 1
-                log(f"  🌐 Rede: {moeda} — {e}")
-            except ccxt.ExchangeError as e:
-                erros += 1
-                log(f"  🏦 Exchange: {moeda} — {e}")
             except Exception as e:
                 erros += 1
-                log(f"  ❌ {moeda} — {e}")
-
+                
             time.sleep(SLEEP_ENTRE_MOEDAS)
 
         log(f"✔️  Ronda terminada — ⭐{enviados} alertas, ❌{erros} erros")
