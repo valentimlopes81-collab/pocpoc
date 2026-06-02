@@ -19,34 +19,37 @@ exchange = ccxt.bybit({
     'options': {'defaultType': 'swap'}
 })
 
+# Formato correto para Bybit perpetuals: BASE/USDT:USDT
+# O ccxt mapeia internamente para BASEUSDT no Bybit
 moedas = [
-    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'HYPE/USDT:USDT',
-    'BNB/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT',
-    'LINK/USDT:USDT', 'TAO/USDT:USDT', 'SUI/USDT:USDT', 'LTC/USDT:USDT',
-    'ZEC/USDT:USDT', 'VIRTUAL/USDT:USDT', 'SHIB/USDT:USDT', 'DOT/USDT:USDT',
-    'TRX/USDT:USDT', 'AVAX/USDT:USDT', 'TON/USDT:USDT', 'NEAR/USDT:USDT',
-    'BCH/USDT:USDT', 'POL/USDT:USDT', 'UNI/USDT:USDT', 'PEPE/USDT:USDT',
-    'WIF/USDT:USDT', 'APT/USDT:USDT', 'RNDR/USDT:USDT', 'ARB/USDT:USDT',
-    'INJ/USDT:USDT', 'FET/USDT:USDT', 'OP/USDT:USDT', 'FIL/USDT:USDT',
-    'KAS/USDT:USDT', 'TIA/USDT:USDT', 'STX/USDT:USDT', 'IMX/USDT:USDT',
-    'MNT/USDT:USDT', 'XLM/USDT:USDT', 'SEI/USDT:USDT', 'GALA/USDT:USDT',
+    'BTC/USDT:USDT',  'ETH/USDT:USDT',  'SOL/USDT:USDT',  'HYPE/USDT:USDT',
+    'BNB/USDT:USDT',  'XRP/USDT:USDT',  'DOGE/USDT:USDT', 'ADA/USDT:USDT',
+    'LINK/USDT:USDT', 'TAO/USDT:USDT',  'SUI/USDT:USDT',  'LTC/USDT:USDT',
+    'ZEC/USDT:USDT',  'VIRTUAL/USDT:USDT','SHIB/USDT:USDT','DOT/USDT:USDT',
+    'TRX/USDT:USDT',  'AVAX/USDT:USDT', 'TON/USDT:USDT',  'NEAR/USDT:USDT',
+    'BCH/USDT:USDT',  'POL/USDT:USDT',  'UNI/USDT:USDT',  'PEPE/USDT:USDT',
+    'WIF/USDT:USDT',  'APT/USDT:USDT',  'RNDR/USDT:USDT', 'ARB/USDT:USDT',
+    'INJ/USDT:USDT',  'FET/USDT:USDT',  'OP/USDT:USDT',   'FIL/USDT:USDT',
+    'KAS/USDT:USDT',  'TIA/USDT:USDT',  'STX/USDT:USDT',  'IMX/USDT:USDT',
+    'MNT/USDT:USDT',  'XLM/USDT:USDT',  'SEI/USDT:USDT',  'GALA/USDT:USDT',
     'RUNE/USDT:USDT', 'ATOM/USDT:USDT', 'AAVE/USDT:USDT', 'WLD/USDT:USDT',
-    'ALGO/USDT:USDT', 'QNT/USDT:USDT', 'SNX/USDT:USDT', 'GRT/USDT:USDT',
-    'THETA/USDT:USDT', 'EOS/USDT:USDT', 'SAND/USDT:USDT', 'MANA/USDT:USDT',
-    'FTM/USDT:USDT', 'APE/USDT:USDT', 'CHZ/USDT:USDT', 'DYDX/USDT:USDT',
-    'CRV/USDT:USDT', 'LDO/USDT:USDT', 'EGLD/USDT:USDT', 'ENS/USDT:USDT',
-    'MKR/USDT:USDT', 'BONK/USDT:USDT', 'FLOKI/USDT:USDT', 'JUP/USDT:USDT',
+    'ALGO/USDT:USDT', 'QNT/USDT:USDT',  'SNX/USDT:USDT',  'GRT/USDT:USDT',
+    'THETA/USDT:USDT','EOS/USDT:USDT',  'SAND/USDT:USDT', 'MANA/USDT:USDT',
+    'FTM/USDT:USDT',  'APE/USDT:USDT',  'CHZ/USDT:USDT',  'DYDX/USDT:USDT',
+    'CRV/USDT:USDT',  'LDO/USDT:USDT',  'EGLD/USDT:USDT', 'ENS/USDT:USDT',
+    'MKR/USDT:USDT',  'BONK/USDT:USDT', 'FLOKI/USDT:USDT','JUP/USDT:USDT',
     'PYTH/USDT:USDT', 'STRK/USDT:USDT', 'BOME/USDT:USDT', 'NOT/USDT:USDT',
-    'ZK/USDT:USDT', 'ZRO/USDT:USDT', 'ENA/USDT:USDT', 'ONDO/USDT:USDT',
-    'OM/USDT:USDT', 'PENDLE/USDT:USDT'
+    'ZK/USDT:USDT',   'ZRO/USDT:USDT',  'ENA/USDT:USDT',  'ONDO/USDT:USDT',
+    'OM/USDT:USDT',   'PENDLE/USDT:USDT',
 ]
 
-PROX_PCT        = 1.5
-CONFLUENCIA_PCT = 1.0
-TTL_ALERTA_H    = 4
+PROX_PCT           = 1.5
+CONFLUENCIA_PCT    = 1.0
+TTL_ALERTA_H       = 4
+SLEEP_ENTRE_MOEDAS = 0.5
 
 alertas_enviados = {}
-thread_radar     = None  # referência global para o watchdog verificar
+thread_radar     = None
 
 # ==========================================
 # 2. UTILITÁRIOS
@@ -83,15 +86,10 @@ def segundos_para_proxima_vela():
     minuto   = agora.minute
     segundo  = agora.second
     microseg = agora.microsecond
-
-    if minuto < 30:
-        espera = (30 - minuto) * 60 - segundo - microseg / 1_000_000
-    else:
-        espera = (60 - minuto) * 60 - segundo - microseg / 1_000_000
-
+    espera   = ((30 - minuto) if minuto < 30 else (60 - minuto)) * 60 \
+               - segundo - microseg / 1_000_000
     if espera <= 0:
         espera += 1800
-
     return espera
 
 # ==========================================
@@ -101,21 +99,17 @@ def calc_rsi_array(fechos, periodos=14):
     rsis = [50.0] * len(fechos)
     if len(fechos) < periodos + 1:
         return rsis
-
     ganhos, perdas = [], []
     for i in range(1, len(fechos)):
         diff = fechos[i] - fechos[i - 1]
         ganhos.append(max(diff, 0.0))
         perdas.append(max(-diff, 0.0))
-
     avg_g = sum(ganhos[:periodos]) / periodos
     avg_p = sum(perdas[:periodos]) / periodos
-
     for i in range(periodos, len(fechos) - 1):
         rsis[i + 1] = 100.0 if avg_p == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_p))
         avg_g = (avg_g * (periodos - 1) + ganhos[i]) / periodos
         avg_p = (avg_p * (periodos - 1) + perdas[i]) / periodos
-
     return rsis
 
 def check_divergencia_bullish(velas, rsis):
@@ -156,9 +150,8 @@ def analisar(moeda):
     velas_4h  = exchange.fetch_ohlcv(moeda, '4h',  limit=42)
 
     preco_atual = velas_30m[-1][4]
-
-    poc_1w = calc_poc(velas_4h)
-    poc_1d = calc_poc(velas_30m[-48:])
+    poc_1w      = calc_poc(velas_4h)
+    poc_1d      = calc_poc(velas_30m[-48:])
 
     dist_poc_pct       = abs(poc_1w - poc_1d) / poc_1w * 100 if poc_1w else 999.0
     poc_em_confluencia = dist_poc_pct <= CONFLUENCIA_PCT
@@ -221,8 +214,22 @@ def formatar_mensagem(nome, d, direcao):
 # ==========================================
 def radar_poc():
     log("📡 Radar arrancou")
+
+    # Carrega os mercados uma vez no arranque para validar símbolos
+    log("📋 A carregar mercados do Bybit...")
+    try:
+        mercados = exchange.load_markets()
+        invalidas = [m for m in moedas if m not in mercados]
+        if invalidas:
+            log(f"⚠️ Símbolos não encontrados: {invalidas}")
+            enviar_telegram(f"⚠️ {len(invalidas)} símbolos inválidos — verifica logs.")
+        else:
+            log(f"✅ Todos os {len(moedas)} símbolos validados.")
+    except Exception as e:
+        log(f"⚠️ Não foi possível validar símbolos: {e}")
+
     enviar_telegram(
-        "🟢 Sniper Ativo!\n\n"
+        "🟢 Sniper v7 Ativo!\n\n"
         "Estratégia: Naked POC (1W+1D) + Divergência RSI\n"
         "Alertas: fecho de cada vela 30m (H:00 e H:30 UTC)"
     )
@@ -268,26 +275,26 @@ def radar_poc():
                 erros += 1
                 log(f"  ❌ {moeda} — {e}")
 
-            time.sleep(0.3)
+            time.sleep(SLEEP_ENTRE_MOEDAS)
 
         log(f"✔️  Ronda terminada — ⭐{enviados} alertas, ❌{erros} erros")
 
 # ==========================================
-# 8. WATCHDOG — relança o radar se morrer
+# 8. WATCHDOG
 # ==========================================
 def watchdog():
     global thread_radar
     log("🐕 Watchdog ativo")
     while True:
+        time.sleep(60)
         if thread_radar is None or not thread_radar.is_alive():
             log("⚠️ Radar morreu — a relançar...")
             enviar_telegram("⚠️ Radar relançado pelo watchdog.")
             thread_radar = threading.Thread(target=radar_poc, daemon=True)
             thread_radar.start()
-        time.sleep(60)  # verifica a cada 60 segundos
 
 # ==========================================
-# 9. FLASK — endpoint de status
+# 9. FLASK
 # ==========================================
 @app.route('/')
 def home():
@@ -298,12 +305,8 @@ def home():
 # 10. ARRANQUE
 # ==========================================
 if __name__ == '__main__':
-    # Lança o radar
     thread_radar = threading.Thread(target=radar_poc, daemon=True)
     thread_radar.start()
-
-    # Lança o watchdog (thread separada que vigia o radar)
     threading.Thread(target=watchdog, daemon=True).start()
-
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
