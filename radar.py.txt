@@ -8,10 +8,6 @@ from flask import Flask
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Sniper POC + Divergência RSI | Ativo"
-
 # ==========================================
 # 1. CONFIGURAÇÕES
 # ==========================================
@@ -45,18 +41,19 @@ moedas = [
     'OM/USDT:USDT', 'PENDLE/USDT:USDT'
 ]
 
-PROX_PCT       = 1.5   # % de proximidade ao POC naked
-CONFLUENCIA_PCT = 1.0  # % máxima entre POC 1D e 1W para serem confluentes
-TTL_ALERTA_H   = 4     # Mesmo alerta não repete em 4h
+PROX_PCT        = 1.5
+CONFLUENCIA_PCT = 1.0
+TTL_ALERTA_H    = 4
 
-alertas_enviados = {}  # {chave: datetime UTC}
+alertas_enviados = {}
+thread_radar     = None  # referência global para o watchdog verificar
 
 # ==========================================
 # 2. UTILITÁRIOS
 # ==========================================
 def log(msg):
     ts = datetime.now(timezone.utc).strftime('%H:%M:%S')
-    print(f"[{ts}] {msg}")
+    print(f"[{ts}] {msg}", flush=True)
 
 def enviar_telegram(mensagem):
     url = (
@@ -79,15 +76,9 @@ def limpar_alertas_expirados():
         log(f"🧹 {len(expirados)} alertas expirados. Restam: {len(alertas_enviados)}")
 
 # ==========================================
-# 3. SINCRONIZAÇÃO — calcula ANTES de dormir
+# 3. SINCRONIZAÇÃO
 # ==========================================
 def segundos_para_proxima_vela():
-    """
-    Calcula quantos segundos faltam para o próximo H:00 ou H:30 UTC.
-    Chamado NO INÍCIO do loop — dorme primeiro, corre depois.
-    Assim a ronda começa sempre em cima do fecho da vela,
-    independentemente de quanto tempo demorou a ronda anterior.
-    """
     agora    = datetime.now(timezone.utc)
     minuto   = agora.minute
     segundo  = agora.second
@@ -127,35 +118,29 @@ def calc_rsi_array(fechos, periodos=14):
 
     return rsis
 
-
 def check_divergencia_bullish(velas, rsis):
-    """Novo mínimo de preço + RSI mais alto + RSI <= 35."""
     if len(velas) < 30:
         return False
     lows_rec = [v[3] for v in velas[-5:]]
     lows_pas = [v[3] for v in velas[-30:-5]]
     rsis_rec = rsis[-5:]
     rsis_pas = rsis[-30:-5]
-    r_low    = min(lows_rec); rsi_r = rsis_rec[lows_rec.index(r_low)]
-    p_low    = min(lows_pas); rsi_p = rsis_pas[lows_pas.index(p_low)]
+    r_low = min(lows_rec); rsi_r = rsis_rec[lows_rec.index(r_low)]
+    p_low = min(lows_pas); rsi_p = rsis_pas[lows_pas.index(p_low)]
     return (r_low < p_low) and (rsi_r > rsi_p) and (rsi_r <= 35)
 
-
 def check_divergencia_bearish(velas, rsis):
-    """Novo máximo de preço + RSI mais baixo + RSI >= 65."""
     if len(velas) < 30:
         return False
     highs_rec = [v[2] for v in velas[-5:]]
     highs_pas = [v[2] for v in velas[-30:-5]]
     rsis_rec  = rsis[-5:]
     rsis_pas  = rsis[-30:-5]
-    r_high    = max(highs_rec); rsi_r = rsis_rec[highs_rec.index(r_high)]
-    p_high    = max(highs_pas); rsi_p = rsis_pas[highs_pas.index(p_high)]
+    r_high = max(highs_rec); rsi_r = rsis_rec[highs_rec.index(r_high)]
+    p_high = max(highs_pas); rsi_p = rsis_pas[highs_pas.index(p_high)]
     return (r_high > p_high) and (rsi_r < rsi_p) and (rsi_r >= 65)
 
-
 def calc_poc(velas):
-    """Fecho da vela com maior volume."""
     poc, vol_max = 0.0, 0.0
     for v in velas:
         if v[5] > vol_max:
@@ -167,33 +152,26 @@ def calc_poc(velas):
 # 5. ANÁLISE POR MOEDA
 # ==========================================
 def analisar(moeda):
-    # Uma única chamada por timeframe — mais rápido, menos API calls
     velas_30m = exchange.fetch_ohlcv(moeda, '30m', limit=100)
     velas_4h  = exchange.fetch_ohlcv(moeda, '4h',  limit=42)
 
     preco_atual = velas_30m[-1][4]
 
-    # POC semanal (42 velas 4H ≈ 1 semana)
     poc_1w = calc_poc(velas_4h)
-
-    # POC diário (últimas 48 velas 30m ≈ 1 dia)
     poc_1d = calc_poc(velas_30m[-48:])
 
-    # Confluência: se os dois POCs estão próximos usa o ponto médio
-    dist_poc_pct      = abs(poc_1w - poc_1d) / poc_1w * 100 if poc_1w else 999.0
+    dist_poc_pct       = abs(poc_1w - poc_1d) / poc_1w * 100 if poc_1w else 999.0
     poc_em_confluencia = dist_poc_pct <= CONFLUENCIA_PCT
     poc_ref            = (poc_1w + poc_1d) / 2 if poc_em_confluencia else poc_1w
 
     zona_top = poc_ref * (1 + 0.0015)
     zona_btm = poc_ref * (1 - 0.0015)
 
-    # Virgindade: nenhuma das últimas 96 velas tocou a zona (exceto as 2 mais recentes)
     is_virgem = all(
         not (v[3] <= zona_top and v[2] >= zona_btm)
         for v in velas_30m[-96:-2]
     )
 
-    # RSI + divergências no 30m
     fechos_30m = [v[4] for v in velas_30m]
     rsis_30m   = calc_rsi_array(fechos_30m, 14)
     rsi_atual  = rsis_30m[-1]
@@ -242,21 +220,19 @@ def formatar_mensagem(nome, d, direcao):
 # 7. NÚCLEO DO RADAR
 # ==========================================
 def radar_poc():
-    log("📡 Sniper Ativo — POC Naked + Div RSI")
+    log("📡 Radar arrancou")
     enviar_telegram(
         "🟢 Sniper Ativo!\n\n"
         "Estratégia: Naked POC (1W+1D) + Divergência RSI\n"
-        "Alertas: no fecho de cada vela 30m (H:00 e H:30 UTC)"
+        "Alertas: fecho de cada vela 30m (H:00 e H:30 UTC)"
     )
 
     while True:
-        # ── Dorme PRIMEIRO até ao próximo fecho ──────────────────
-        espera = segundos_para_proxima_vela()
-        proxima = datetime.now(timezone.utc) + timedelta(seconds=espera)
-        log(f"💤 Próxima ronda: {proxima.strftime('%H:%M:%S')} UTC  ({int(espera)}s)")
+        espera  = segundos_para_proxima_vela()
+        proxima = (datetime.now(timezone.utc) + timedelta(seconds=espera)).strftime('%H:%M:%S')
+        log(f"💤 Próxima ronda: {proxima} UTC  ({int(espera)}s)")
         time.sleep(espera)
 
-        # ── Corre a ronda logo após o fecho ──────────────────────
         hora_ronda = datetime.now(timezone.utc).strftime('%H:%M UTC')
         log(f"🔍 Ronda {hora_ronda} — {len(moedas)} moedas...")
         limpar_alertas_expirados()
@@ -267,16 +243,11 @@ def radar_poc():
             try:
                 d       = analisar(moeda)
                 nome    = moeda.split('/')[0] + "USDT"
-                preco   = d['preco_atual']
                 poc     = d['poc_ref']
-                dist    = abs(preco - poc) / preco * 100
-                direcao = "LONG" if preco > poc else "SHORT"
+                dist    = abs(d['preco_atual'] - poc) / d['preco_atual'] * 100
+                direcao = "LONG" if d['preco_atual'] > poc else "SHORT"
 
-                # Condições obrigatórias:
-                # 1. Preço perto do POC naked
-                # 2. Zona não mitigada (virgem)
-                # 3. Divergência RSI coerente com a direção
-                div_ok = (direcao == "LONG" and d['bull_div']) or \
+                div_ok = (direcao == "LONG"  and d['bull_div']) or \
                          (direcao == "SHORT" and d['bear_div'])
 
                 if dist <= PROX_PCT and d['is_virgem'] and div_ok:
@@ -302,9 +273,37 @@ def radar_poc():
         log(f"✔️  Ronda terminada — ⭐{enviados} alertas, ❌{erros} erros")
 
 # ==========================================
-# 8. ARRANQUE
+# 8. WATCHDOG — relança o radar se morrer
+# ==========================================
+def watchdog():
+    global thread_radar
+    log("🐕 Watchdog ativo")
+    while True:
+        if thread_radar is None or not thread_radar.is_alive():
+            log("⚠️ Radar morreu — a relançar...")
+            enviar_telegram("⚠️ Radar relançado pelo watchdog.")
+            thread_radar = threading.Thread(target=radar_poc, daemon=True)
+            thread_radar.start()
+        time.sleep(60)  # verifica a cada 60 segundos
+
+# ==========================================
+# 9. FLASK — endpoint de status
+# ==========================================
+@app.route('/')
+def home():
+    estado = "🟢 ATIVO" if thread_radar and thread_radar.is_alive() else "🔴 INATIVO"
+    return f"Sniper POC | Radar: {estado}"
+
+# ==========================================
+# 10. ARRANQUE
 # ==========================================
 if __name__ == '__main__':
-    threading.Thread(target=radar_poc, daemon=True).start()
+    # Lança o radar
+    thread_radar = threading.Thread(target=radar_poc, daemon=True)
+    thread_radar.start()
+
+    # Lança o watchdog (thread separada que vigia o radar)
+    threading.Thread(target=watchdog, daemon=True).start()
+
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
