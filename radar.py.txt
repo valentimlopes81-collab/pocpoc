@@ -36,7 +36,7 @@ MOEDAS_DESEJADAS = [
 PROX_PCT           = 1.5
 CONFLUENCIA_PCT    = 1.0
 TTL_ALERTA_H       = 4
-SLEEP_ENTRE_MOEDAS = 1.2
+SLEEP_ENTRE_MOEDAS = 2.0
 
 alertas_enviados = {}
 thread_radar     = None
@@ -285,6 +285,9 @@ def radar_poc():
 
                 div_ok = (direcao == "LONG"  and d['bull_div']) or \
                          (direcao == "SHORT" and d['bear_div'])
+
+                # Debug: mostra o estado de cada condição
+                log(f"  {nome} | dist:{round(dist,2)}% virgem:{'✅' if d['is_virgem'] else '❌'} div:{'✅' if div_ok else '❌'} RSI:{round(d['rsi_atual'],1)}")
 
                 if dist <= PROX_PCT and d['is_virgem'] and div_ok:
                     chave = f"{moeda}_{round(poc, 4)}"
