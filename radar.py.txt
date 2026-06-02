@@ -19,40 +19,77 @@ exchange = ccxt.bybit({
     'options': {'defaultType': 'swap'}
 })
 
-# Formato correto para Bybit perpetuals: BASE/USDT:USDT
-# O ccxt mapeia internamente para BASEUSDT no Bybit
-moedas = [
-    'BTC/USDT:USDT',  'ETH/USDT:USDT',  'SOL/USDT:USDT',  'HYPE/USDT:USDT',
-    'BNB/USDT:USDT',  'XRP/USDT:USDT',  'DOGE/USDT:USDT', 'ADA/USDT:USDT',
-    'LINK/USDT:USDT', 'TAO/USDT:USDT',  'SUI/USDT:USDT',  'LTC/USDT:USDT',
-    'ZEC/USDT:USDT',  'VIRTUAL/USDT:USDT','SHIB/USDT:USDT','DOT/USDT:USDT',
-    'TRX/USDT:USDT',  'AVAX/USDT:USDT', 'TON/USDT:USDT',  'NEAR/USDT:USDT',
-    'BCH/USDT:USDT',  'POL/USDT:USDT',  'UNI/USDT:USDT',  'PEPE/USDT:USDT',
-    'WIF/USDT:USDT',  'APT/USDT:USDT',  'RNDR/USDT:USDT', 'ARB/USDT:USDT',
-    'INJ/USDT:USDT',  'FET/USDT:USDT',  'OP/USDT:USDT',   'FIL/USDT:USDT',
-    'KAS/USDT:USDT',  'TIA/USDT:USDT',  'STX/USDT:USDT',  'IMX/USDT:USDT',
-    'MNT/USDT:USDT',  'XLM/USDT:USDT',  'SEI/USDT:USDT',  'GALA/USDT:USDT',
-    'RUNE/USDT:USDT', 'ATOM/USDT:USDT', 'AAVE/USDT:USDT', 'WLD/USDT:USDT',
-    'ALGO/USDT:USDT', 'QNT/USDT:USDT',  'SNX/USDT:USDT',  'GRT/USDT:USDT',
-    'THETA/USDT:USDT','EOS/USDT:USDT',  'SAND/USDT:USDT', 'MANA/USDT:USDT',
-    'FTM/USDT:USDT',  'APE/USDT:USDT',  'CHZ/USDT:USDT',  'DYDX/USDT:USDT',
-    'CRV/USDT:USDT',  'LDO/USDT:USDT',  'EGLD/USDT:USDT', 'ENS/USDT:USDT',
-    'MKR/USDT:USDT',  'BONK/USDT:USDT', 'FLOKI/USDT:USDT','JUP/USDT:USDT',
-    'PYTH/USDT:USDT', 'STRK/USDT:USDT', 'BOME/USDT:USDT', 'NOT/USDT:USDT',
-    'ZK/USDT:USDT',   'ZRO/USDT:USDT',  'ENA/USDT:USDT',  'ONDO/USDT:USDT',
-    'OM/USDT:USDT',   'PENDLE/USDT:USDT',
+# Moedas que queres seguir — o bot resolve automaticamente o símbolo correto no Bybit
+MOEDAS_DESEJADAS = [
+    'BTC', 'ETH', 'SOL', 'HYPE', 'BNB', 'XRP', 'DOGE', 'ADA',
+    'LINK', 'TAO', 'SUI', 'LTC', 'ZEC', 'VIRTUAL', 'SHIB', 'DOT',
+    'TRX', 'AVAX', 'TON', 'NEAR', 'BCH', 'POL', 'UNI', 'PEPE',
+    'WIF', 'APT', 'RNDR', 'ARB', 'INJ', 'FET', 'OP', 'FIL',
+    'KAS', 'TIA', 'STX', 'IMX', 'MNT', 'XLM', 'SEI', 'GALA',
+    'RUNE', 'ATOM', 'AAVE', 'WLD', 'ALGO', 'QNT', 'SNX', 'GRT',
+    'THETA', 'EOS', 'SAND', 'MANA', 'FTM', 'APE', 'CHZ', 'DYDX',
+    'CRV', 'LDO', 'EGLD', 'ENS', 'MKR', 'BONK', 'FLOKI', 'JUP',
+    'PYTH', 'STRK', 'BOME', 'NOT', 'ZK', 'ZRO', 'ENA', 'ONDO',
+    'OM', 'PENDLE',
 ]
 
 PROX_PCT           = 1.5
 CONFLUENCIA_PCT    = 1.0
 TTL_ALERTA_H       = 4
-SLEEP_ENTRE_MOEDAS = 0.5
+SLEEP_ENTRE_MOEDAS = 1.2
 
 alertas_enviados = {}
 thread_radar     = None
+moedas_validadas = []   # preenchido no arranque com símbolos reais do Bybit
 
 # ==========================================
-# 2. UTILITÁRIOS
+# 2. RESOLUÇÃO AUTOMÁTICA DE SÍMBOLOS
+# ==========================================
+def resolver_simbolos():
+    """
+    Carrega todos os mercados do Bybit e encontra o símbolo correto
+    para cada moeda desejada. Trata automaticamente casos especiais
+    como 1000SHIB, 1000PEPE, RENDER (ex-RNDR), etc.
+    """
+    log("📋 A carregar mercados do Bybit...")
+    mercados = exchange.load_markets()
+
+    # Índice: base → símbolo ccxt (apenas perpetuals USDT ativos)
+    indice = {}
+    for simbolo, info in mercados.items():
+        if info.get('swap') and info.get('quote') == 'USDT' and info.get('active'):
+            base = info.get('base', '')
+            if base:
+                indice[base.upper()] = simbolo
+
+    validas   = []
+    invalidas = []
+
+    for moeda in MOEDAS_DESEJADAS:
+        m = moeda.upper()
+
+        if m in indice:
+            validas.append(indice[m])
+        # Casos especiais: meme coins com preço baixo usam prefixo 1000
+        elif f'1000{m}' in indice:
+            validas.append(indice[f'1000{m}'])
+            log(f"  ℹ️  {m} → usa símbolo 1000{m}")
+        # RNDR foi renomeado para RENDER no Bybit
+        elif m == 'RNDR' and 'RENDER' in indice:
+            validas.append(indice['RENDER'])
+            log(f"  ℹ️  RNDR → usa símbolo RENDER")
+        else:
+            invalidas.append(m)
+
+    if invalidas:
+        log(f"⚠️  Não encontradas no Bybit: {invalidas}")
+        enviar_telegram(f"⚠️ {len(invalidas)} moedas não encontradas no Bybit:\n{', '.join(invalidas)}")
+    
+    log(f"✅ {len(validas)}/{len(MOEDAS_DESEJADAS)} moedas prontas.")
+    return validas
+
+# ==========================================
+# 3. UTILITÁRIOS
 # ==========================================
 def log(msg):
     ts = datetime.now(timezone.utc).strftime('%H:%M:%S')
@@ -79,7 +116,7 @@ def limpar_alertas_expirados():
         log(f"🧹 {len(expirados)} alertas expirados. Restam: {len(alertas_enviados)}")
 
 # ==========================================
-# 3. SINCRONIZAÇÃO
+# 4. SINCRONIZAÇÃO
 # ==========================================
 def segundos_para_proxima_vela():
     agora    = datetime.now(timezone.utc)
@@ -93,7 +130,7 @@ def segundos_para_proxima_vela():
     return espera
 
 # ==========================================
-# 4. MOTORES MATEMÁTICOS
+# 5. MOTORES MATEMÁTICOS
 # ==========================================
 def calc_rsi_array(fechos, periodos=14):
     rsis = [50.0] * len(fechos)
@@ -143,7 +180,7 @@ def calc_poc(velas):
     return poc
 
 # ==========================================
-# 5. ANÁLISE POR MOEDA
+# 6. ANÁLISE POR MOEDA
 # ==========================================
 def analisar(moeda):
     velas_30m = exchange.fetch_ohlcv(moeda, '30m', limit=100)
@@ -187,7 +224,7 @@ def analisar(moeda):
     }
 
 # ==========================================
-# 6. MENSAGEM
+# 7. MENSAGEM
 # ==========================================
 def formatar_mensagem(nome, d, direcao):
     emoji   = "🟢" if direcao == "LONG" else "🔴"
@@ -210,28 +247,20 @@ def formatar_mensagem(nome, d, direcao):
     return msg
 
 # ==========================================
-# 7. NÚCLEO DO RADAR
+# 8. NÚCLEO DO RADAR
 # ==========================================
 def radar_poc():
+    global moedas_validadas
     log("📡 Radar arrancou")
 
-    # Carrega os mercados uma vez no arranque para validar símbolos
-    log("📋 A carregar mercados do Bybit...")
-    try:
-        mercados = exchange.load_markets()
-        invalidas = [m for m in moedas if m not in mercados]
-        if invalidas:
-            log(f"⚠️ Símbolos não encontrados: {invalidas}")
-            enviar_telegram(f"⚠️ {len(invalidas)} símbolos inválidos — verifica logs.")
-        else:
-            log(f"✅ Todos os {len(moedas)} símbolos validados.")
-    except Exception as e:
-        log(f"⚠️ Não foi possível validar símbolos: {e}")
+    # Resolve símbolos reais no arranque
+    moedas_validadas = resolver_simbolos()
 
     enviar_telegram(
-        "🟢 Sniper v7 Ativo!\n\n"
-        "Estratégia: Naked POC (1W+1D) + Divergência RSI\n"
-        "Alertas: fecho de cada vela 30m (H:00 e H:30 UTC)"
+        f"🟢 Sniper Ativo!\n\n"
+        f"✅ {len(moedas_validadas)} moedas carregadas\n"
+        f"Estratégia: Naked POC (1W+1D) + Divergência RSI\n"
+        f"Alertas: fecho de cada vela 30m (H:00 e H:30 UTC)"
     )
 
     while True:
@@ -241,12 +270,12 @@ def radar_poc():
         time.sleep(espera)
 
         hora_ronda = datetime.now(timezone.utc).strftime('%H:%M UTC')
-        log(f"🔍 Ronda {hora_ronda} — {len(moedas)} moedas...")
+        log(f"🔍 Ronda {hora_ronda} — {len(moedas_validadas)} moedas...")
         limpar_alertas_expirados()
 
         enviados, erros = 0, 0
 
-        for moeda in moedas:
+        for moeda in moedas_validadas:
             try:
                 d       = analisar(moeda)
                 nome    = moeda.split('/')[0] + "USDT"
@@ -280,7 +309,7 @@ def radar_poc():
         log(f"✔️  Ronda terminada — ⭐{enviados} alertas, ❌{erros} erros")
 
 # ==========================================
-# 8. WATCHDOG
+# 9. WATCHDOG
 # ==========================================
 def watchdog():
     global thread_radar
@@ -294,15 +323,15 @@ def watchdog():
             thread_radar.start()
 
 # ==========================================
-# 9. FLASK
+# 10. FLASK
 # ==========================================
 @app.route('/')
 def home():
     estado = "🟢 ATIVO" if thread_radar and thread_radar.is_alive() else "🔴 INATIVO"
-    return f"Sniper POC | Radar: {estado}"
+    return f"Sniper POC | Radar: {estado} | Moedas: {len(moedas_validadas)}"
 
 # ==========================================
-# 10. ARRANQUE
+# 11. ARRANQUE
 # ==========================================
 if __name__ == '__main__':
     thread_radar = threading.Thread(target=radar_poc, daemon=True)
