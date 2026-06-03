@@ -110,7 +110,7 @@ def segundos_para_proxima_vela():
     return espera
 
 # ==========================================
-# 5. MOTORES MATEMÁTICOS (CORRIGIDOS DINÂMICOS)
+# 5. MOTORES MATEMÁTICOS (VISÃO MACRO - 90 VELAS)
 # ==========================================
 def calc_rsi_array(fechos, periodos=14):
     rsis = [50.0] * len(fechos)
@@ -134,11 +134,11 @@ def calc_rsi_array(fechos, periodos=14):
     return rsis
 
 def check_divergencia_bullish(velas, rsis):
-    if len(velas) < 40: return False
+    if len(velas) < 90: return False
     
-    # Isolar wicks (Lows) e RSIs correspondentes das últimas 40 velas
-    lows = [v[3] for v in velas[-40:]]
-    rsis_cortados = rsis[-40:]
+    # Isolar wicks (Lows) e RSIs correspondentes das últimas 90 velas (45 horas)
+    lows = [v[3] for v in velas[-90:]]
+    rsis_cortados = rsis[-90:]
     
     # 1. Encontrar o fundo estrutural RECENTE (pesquisa orgânica nas últimas 8 velas)
     recent_window = 8
@@ -166,11 +166,11 @@ def check_divergencia_bullish(velas, rsis):
     return (r_low < p_low) and (rsi_r > rsi_p)
 
 def check_divergencia_bearish(velas, rsis):
-    if len(velas) < 40: return False
+    if len(velas) < 90: return False
     
-    # Isolar wicks (Highs) e RSIs correspondentes
-    highs = [v[2] for v in velas[-40:]]
-    rsis_cortados = rsis[-40:]
+    # Isolar wicks (Highs) e RSIs correspondentes das últimas 90 velas (45 horas)
+    highs = [v[2] for v in velas[-90:]]
+    rsis_cortados = rsis[-90:]
     
     recent_window = 8
     r_high = max(highs[-recent_window:])
@@ -199,7 +199,6 @@ def calc_poc(velas):
             vol_max = v[5]
             poc     = v[4]
     return poc
-
 # ==========================================
 # 6. ANÁLISE POR MOEDA
 # ==========================================
