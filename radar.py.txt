@@ -14,9 +14,14 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8800841517:AAGQlDgMdHmd1bdp34a231UswowVCsEwqfM')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID', '5269247998')
 
-exchange = ccxt.bybit({
+# Inicialização Dupla de Corretoras (Smart Money Engine)
+bybit = ccxt.bybit({
     'enableRateLimit': True,
     'options': {'defaultType': 'swap'}
+})
+binance = ccxt.binance({
+    'enableRateLimit': True,
+    'options': {'defaultType': 'future'}
 })
 
 MOEDAS_DESEJADAS = [
@@ -32,10 +37,10 @@ MOEDAS_DESEJADAS = [
     'OM', 'PENDLE',
 ]
 
-PROX_PCT           = 1.5
-CONFLUENCIA_PCT    = 1.0
+PROX_PCT           = 1.5   # Distância para ativar o Radar
+CONFLUENCIA_PCT    = 1.0   # Agrupamento de POCs (Base Forte)
 TTL_ALERTA_H       = 4
-SLEEP_ENTRE_MOEDAS = 0.2  # Reduzido para o bot ser rápido!
+SLEEP_ENTRE_MOEDAS = 1.0   # 1 segundo para proteger do Ban das corretoras
 
 alertas_enviados = {}
 thread_radar     = None
@@ -45,8 +50,12 @@ moedas_validadas = []
 # 2. RESOLUÇÃO AUTOMÁTICA DE SÍMBOLOS
 # ==========================================
 def resolver_simbolos():
-    log("📋 A carregar mercados do Bybit...")
-    mercados = exchange.load_markets()
+    log("📋 A carregar mercados da Bybit e Binance...")
+    mercados = bybit.load_markets()
+    try:
+        binance.load_markets() # Prepara a Binance silenciosamente
+    except:
+        log("⚠️ Aviso: Binance atrasada, usaremos fallback de volume.")
 
     indice = {}
     for simbolo, info in mercados.items():
@@ -95,9 +104,6 @@ def limpar_alertas_expirados():
     for k in expirados:
         del alertas_enviados[k]
 
-# ==========================================
-# 4. SINCRONIZAÇÃO
-# ==========================================
 def segundos_para_proxima_vela():
     agora    = datetime.now(timezone.utc)
     minuto   = agora.minute
@@ -110,118 +116,153 @@ def segundos_para_proxima_vela():
     return espera
 
 # ==========================================
-# 5. MOTORES MATEMÁTICOS (VISÃO MACRO - 90 VELAS)
+# 4. MOTORES DE VOLUME E DIVERGÊNCIA
 # ==========================================
 def calc_rsi_array(fechos, periodos=14):
     rsis = [50.0] * len(fechos)
-    if len(fechos) <= periodos:
-        return rsis
-
-    # Cálculo perfeito e sem desfasamento do RSI (RMA)
+    if len(fechos) <= periodos: return rsis
     ganhos = [max(fechos[i] - fechos[i-1], 0) for i in range(1, len(fechos))]
     perdas = [max(fechos[i-1] - fechos[i], 0) for i in range(1, len(fechos))]
-
     avg_g = sum(ganhos[:periodos]) / periodos
     avg_p = sum(perdas[:periodos]) / periodos
-
     rsis[periodos] = 100.0 if avg_p == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_p))
-
     for i in range(periodos, len(ganhos)):
         avg_g = (avg_g * (periodos - 1) + ganhos[i]) / periodos
         avg_p = (avg_p * (periodos - 1) + perdas[i]) / periodos
         rsis[i + 1] = 100.0 if avg_p == 0 else 100.0 - (100.0 / (1.0 + avg_g / avg_p))
-        
     return rsis
 
 def check_divergencia_bullish(velas, rsis):
     if len(velas) < 90: return False
-    
-    # Isolar wicks (Lows) e RSIs correspondentes das últimas 90 velas (45 horas)
     lows = [v[3] for v in velas[-90:]]
     rsis_cortados = rsis[-90:]
-    
-    # 1. Encontrar o fundo estrutural RECENTE (pesquisa orgânica nas últimas 8 velas)
     recent_window = 8
     r_low = min(lows[-recent_window:])
-    
-    # Localizar o índice exato desse wick recente
     idx_r_low = len(lows) - recent_window + lows[-recent_window:].index(r_low)
     rsi_r = rsis_cortados[idx_r_low]
-    
-    # Se no momento do wick o RSI não estava esmagado, abortar
     if rsi_r > 40: return False
-    
-    # 2. Encontrar o fundo estrutural PASSADO
-    # Garantir um gap de pelo menos 3 velas para confirmar que é um pivot diferente
     if idx_r_low < 5: return False 
-    
     past_lows = lows[:idx_r_low - 3]
     if not past_lows: return False
-    
     p_low = min(past_lows)
     idx_p_low = past_lows.index(p_low)
     rsi_p = rsis_cortados[idx_p_low]
-    
-    # 3. Matemática Pura: Wick mais baixo, RSI mais alto
     return (r_low < p_low) and (rsi_r > rsi_p)
 
 def check_divergencia_bearish(velas, rsis):
     if len(velas) < 90: return False
-    
-    # Isolar wicks (Highs) e RSIs correspondentes das últimas 90 velas (45 horas)
     highs = [v[2] for v in velas[-90:]]
     rsis_cortados = rsis[-90:]
-    
     recent_window = 8
     r_high = max(highs[-recent_window:])
-    
     idx_r_high = len(highs) - recent_window + highs[-recent_window:].index(r_high)
     rsi_r = rsis_cortados[idx_r_high]
-    
     if rsi_r < 60: return False
-    
     if idx_r_high < 5: return False
-    
     past_highs = highs[:idx_r_high - 3]
     if not past_highs: return False
-    
     p_high = max(past_highs)
     idx_p_high = past_highs.index(p_high)
     rsi_p = rsis_cortados[idx_p_high]
-    
-    # Wick mais alto, RSI mais baixo
     return (r_high > p_high) and (rsi_r < rsi_p)
 
-def calc_poc(velas):
-    poc, vol_max = 0.0, 0.0
-    for v in velas:
-        if v[5] > vol_max:
-            vol_max = v[5]
-            poc     = v[4]
-    return poc
+# ==========================================
+# 5. O CÉREBRO INSTITUCIONAL (1W POCS)
+# ==========================================
+def fetch_fusion_1d(moeda_bybit):
+    """Busca 1000 dias e funde o volume da Bybit e Binance."""
+    base_coin = moeda_bybit.split('/')[0].replace('1000', '')
+    velas_by = bybit.fetch_ohlcv(moeda_bybit, '1d', limit=1000)
+    
+    sym_bin_1 = f"{base_coin}/USDT:USDT"
+    sym_bin_2 = f"1000{base_coin}/USDT:USDT"
+    
+    velas_bin = []
+    if binance.markets:
+        try:
+            if sym_bin_1 in binance.markets:
+                velas_bin = binance.fetch_ohlcv(sym_bin_1, '1d', limit=1000)
+            elif sym_bin_2 in binance.markets:
+                velas_bin = binance.fetch_ohlcv(sym_bin_2, '1d', limit=1000)
+        except: pass
+
+    vol_bin_dict = {v[0]: v[5] for v in velas_bin}
+    fusion = []
+    for v in velas_by:
+        ts = v[0]
+        vol_total = v[5] + vol_bin_dict.get(ts, 0.0)
+        fusion.append([ts, v[1], v[2], v[3], v[4], vol_total])
+    return fusion
+
+def calc_macro_pocs(velas_1d):
+    """Agrupa em Semanas e devolve APENAS os POCs que estão Virgens."""
+    semanas = {}
+    for v in velas_1d:
+        ts = v[0]
+        dt = datetime.fromtimestamp(ts/1000, tz=timezone.utc)
+        ano, sem, _ = dt.isocalendar()
+        chave = f"{ano}-{sem:02d}"
+        if chave not in semanas: semanas[chave] = []
+        semanas[chave].append(v)
+
+    pocs_1w = []
+    for chave, dias in semanas.items():
+        max_vol, poc_price = -1, 0
+        for d in dias:
+            if d[5] > max_vol:
+                max_vol = d[5]
+                poc_price = d[4] # Close do dia com mais volume
+        pocs_1w.append({'poc': poc_price, 'ts_end': dias[-1][0]})
+
+    if len(pocs_1w) > 0:
+        pocs_1w = pocs_1w[:-1] # Remove a semana em formação
+
+    naked_pocs = []
+    for p in pocs_1w:
+        poc = p['poc']
+        ts_end = p['ts_end']
+        is_naked = True
+        # Verifica se alguma vela diária tocou no nível APÓS a sua criação
+        for v in velas_1d:
+            if v[0] > ts_end:
+                if v[3] <= poc <= v[2]: # Low <= POC <= High (Tocado)
+                    is_naked = False
+                    break
+        if is_naked:
+            naked_pocs.append(poc)
+
+    return naked_pocs
+
+def classificar_pocs(naked_pocs):
+    """Classifica se o Naked POC é Base Forte (Aglomerado) ou Vácuo (Solo)"""
+    classificados = []
+    for p in naked_pocs:
+        vizinhos = sum(1 for outro in naked_pocs if outro != p and abs(outro - p)/p*100 <= CONFLUENCIA_PCT)
+        tipo = "AGLOMERADO (Base Forte)" if vizinhos > 0 else "SOLO (Vácuo)"
+        classificados.append({'preco': p, 'tipo': tipo, 'vizinhos': vizinhos})
+    return classificados
+
 # ==========================================
 # 6. ANÁLISE POR MOEDA
 # ==========================================
 def analisar(moeda):
-    velas_30m = exchange.fetch_ohlcv(moeda, '30m', limit=100)
-    velas_4h  = exchange.fetch_ohlcv(moeda, '4h',  limit=42)
+    velas_fusion = fetch_fusion_1d(moeda)
+    naked_pocs = calc_macro_pocs(velas_fusion)
+    pocs_classificados = classificar_pocs(naked_pocs)
 
-    preco_atual = exchange.fetch_ticker(moeda)['last']
-    poc_1w      = calc_poc(velas_4h)
-    poc_1d      = calc_poc(velas_30m[-48:])
+    velas_30m = bybit.fetch_ohlcv(moeda, '30m', limit=90)
+    preco_atual = velas_30m[-1][4]
 
-    dist_poc_pct       = abs(poc_1w - poc_1d) / poc_1w * 100 if poc_1w else 999.0
-    poc_em_confluencia = dist_poc_pct <= CONFLUENCIA_PCT
-    poc_ref            = (poc_1w + poc_1d) / 2 if poc_em_confluencia else poc_1w
+    # Encontra o Naked POC mais próximo
+    poc_alvo = None
+    menor_dist = 999.0
+    for p in pocs_classificados:
+        dist = abs(preco_atual - p['preco']) / preco_atual * 100
+        if dist < menor_dist:
+            menor_dist = dist
+            poc_alvo = p
 
-    zona_top = poc_ref * (1 + 0.0015)
-    zona_btm = poc_ref * (1 - 0.0015)
-
-    is_virgem = all(
-        not (v[3] <= zona_top and v[2] >= zona_btm)
-        for v in velas_30m[-96:-2]
-    )
-
+    # Deteção de Divergência
     fechos_30m = [v[4] for v in velas_30m]
     rsis_30m   = calc_rsi_array(fechos_30m, 14)
     rsi_atual  = rsis_30m[-1]
@@ -229,42 +270,52 @@ def analisar(moeda):
     bull_div   = check_divergencia_bullish(velas_30m, rsis_30m)
     bear_div   = check_divergencia_bearish(velas_30m, rsis_30m)
 
+    direcao = "LONG" if (poc_alvo and preco_atual > poc_alvo['preco']) else "SHORT"
+    div_ok = (direcao == "LONG" and bull_div) or (direcao == "SHORT" and bear_div)
+
     return {
-        'preco_atual':        preco_atual,
-        'poc_ref':            poc_ref,
-        'poc_1w':             poc_1w,
-        'poc_1d':             poc_1d,
-        'poc_em_confluencia': poc_em_confluencia,
-        'dist_poc_pct':       dist_poc_pct,
-        'zona_top':           zona_top,
-        'zona_btm':           zona_btm,
-        'is_virgem':          is_virgem,
-        'rsi_atual':          rsi_atual,
-        'bull_div':           bull_div,
-        'bear_div':           bear_div,
+        'preco_atual': preco_atual,
+        'poc_alvo': poc_alvo,
+        'dist_pct': menor_dist,
+        'rsi_atual': rsi_atual,
+        'div_ok': div_ok,
+        'direcao': direcao
     }
 
 # ==========================================
-# 7. MENSAGEM
+# 7. MENSAGEM DO BOT
 # ==========================================
-def formatar_mensagem(nome, d, direcao):
-    emoji   = "🟢" if direcao == "LONG" else "🔴"
-    div_txt = "🟢 BULLISH" if d['bull_div'] else "🔴 BEARISH"
-    sl      = d['zona_btm'] * (1 - 0.002) if direcao == "LONG" else d['zona_top'] * (1 + 0.002)
-    dist    = round(abs(d['preco_atual'] - d['poc_ref']) / d['preco_atual'] * 100, 2)
-    conf_txt = (f"✅ 1D+1W confluentes ({round(d['dist_poc_pct'], 2)}%)"
-                if d['poc_em_confluencia'] else "POC 1W Isolado")
+def formatar_mensagem(nome, d):
+    poc = d['poc_alvo']['preco']
+    tipo = d['poc_alvo']['tipo']
+    vizinhos = d['poc_alvo']['vizinhos']
+    div_ok = d['div_ok']
+    direcao = d['direcao']
+    dist = round(d['dist_pct'], 2)
+    preco = d['preco_atual']
+    rsi = round(d['rsi_atual'], 1)
 
-    msg  = f"⭐ NAKED POC + DIV RSI: {nome}\n"
+    emoji = "🟢" if direcao == "LONG" else "🔴"
+    sl = poc * (1 - 0.002) if direcao == "LONG" else poc * (1 + 0.002)
+
+    # 3 SITUAÇÕES DE ALERTA DEFINIDAS AQUI
+    if div_ok:
+        titulo = f"⭐ SUPREMO (POC 1W + DIV RSI): {nome}"
+    elif vizinhos > 0:
+        titulo = f"🧱 BASE FORTE (1W Aglomerado): {nome}"
+    else:
+        titulo = f"⚡ VÁCUO (Naked 1W Solo): {nome}"
+
+    msg  = f"{titulo}\n"
     msg += f"{'─' * 30}\n"
-    msg += f"{emoji} {direcao}  |  {conf_txt}\n\n"
-    msg += f"📍 POC: {round(d['poc_ref'], 6)}  ({dist}% dist.)\n"
-    msg += f"   1W: {round(d['poc_1w'], 4)}  |  1D: {round(d['poc_1d'], 4)}\n\n"
-    msg += f"📉 RSI 30m: {round(d['rsi_atual'], 1)}  →  Div {div_txt}\n"
-    msg += f"{'✅ Zona virgem' if d['is_virgem'] else '⚪ Zona já testada'}\n\n"
-    msg += f"💰 Preço:  {d['preco_atual']}\n"
-    msg += f"🎯 Entry:  {round(d['poc_ref'], 6)}\n"
-    msg += f"🛑 Stop:   {round(sl, 6)}"
+    msg += f"{emoji} {direcao} | {tipo}\n\n"
+    msg += f"📍 Alvo 1W: {round(poc, 6)} ({dist}% dist.)\n"
+    msg += f"📦 Estrutura: {vizinhos + 1} POCs nesta zona\n\n"
+    msg += f"📉 RSI 30m: {rsi} → Div {'✅ VALIDADA' if div_ok else '❌ S/ Div'}\n"
+    msg += f"🛡️ Liquidez: 100% Intacta (Naked)\n\n"
+    msg += f"💰 Preço Atual: {preco}\n"
+    msg += f"🎯 Entry Limite: {round(poc, 6)}\n"
+    msg += f"🛑 Stop Loss: {round(sl, 6)}"
     return msg
 
 # ==========================================
@@ -272,10 +323,10 @@ def formatar_mensagem(nome, d, direcao):
 # ==========================================
 def radar_poc():
     global moedas_validadas
-    log("📡 Radar arrancou")
+    log("📡 Radar Macro arrancou")
 
     moedas_validadas = resolver_simbolos()
-    enviar_telegram("🟢 Sniper Ativo! Foco: Naked POC + Divs RSI Corrigidas (30m).")
+    enviar_telegram("🟢 Sniper Macro Ativo! Foco: Aglomerados 1W | Solo 1W | Div RSI + POC (Binance+Bybit Agg).")
 
     while True:
         espera  = segundos_para_proxima_vela()
@@ -283,42 +334,41 @@ def radar_poc():
         log(f"💤 Próxima ronda: {proxima} UTC  ({int(espera)}s)")
         
         time.sleep(espera)
-        
-        # O SEGREDO: Dá 5 segundos à corretora para ela gerar a vela nova corretamente
-        time.sleep(5)
+        time.sleep(5) # Atraso de segurança da corretora
 
         hora_ronda = datetime.now(timezone.utc).strftime('%H:%M UTC')
-        log(f"🔍 Ronda {hora_ronda} — A analisar {len(moedas_validadas)} moedas...")
+        log(f"🔍 Ronda {hora_ronda} — A ler Macro 1W de {len(moedas_validadas)} moedas...")
         limpar_alertas_expirados()
 
         enviados, erros = 0, 0
 
         for moeda in moedas_validadas:
             try:
-                d       = analisar(moeda)
-                nome    = moeda.split('/')[0] + "USDT"
-                poc     = d['poc_ref']
-                dist    = abs(d['preco_atual'] - poc) / d['preco_atual'] * 100
+                d = analisar(moeda)
+                nome = moeda.split('/')[0] + "USDT"
                 
-                direcao = "LONG" if d['preco_atual'] > poc else "SHORT"
-                div_ok  = (direcao == "LONG"  and d['bull_div']) or \
-                          (direcao == "SHORT" and d['bear_div'])
+                if d['poc_alvo']:
+                    dist = d['dist_pct']
+                    tipo = "Agl" if d['poc_alvo']['vizinhos'] > 0 else "Solo"
+                    div = '✅' if d['div_ok'] else '❌'
+                    rsi = round(d['rsi_atual'], 1)
+                    
+                    log(f"  {nome} | dist:{round(dist,2)}% | {tipo} | Div:{div} | RSI:{rsi}")
 
-                # Log fantástico que tu criaste para veres a máquina a pensar
-                log(f"  {nome} | dist:{round(dist,2)}% virgem:{'✅' if d['is_virgem'] else '❌'} div:{'✅' if div_ok else '❌'} RSI:{round(d['rsi_atual'],1)}")
-
-                if dist <= PROX_PCT and d['is_virgem'] and div_ok:
-                    chave = f"{moeda}_{round(poc, 4)}"
-                    if chave not in alertas_enviados:
-                        enviar_telegram(formatar_mensagem(nome, d, direcao))
-                        alertas_enviados[chave] = datetime.now(timezone.utc)
-                        enviados += 1
-                        log(f"  ⭐ ALERTA ENVIADO: {nome} {direcao}")
+                    if dist <= PROX_PCT:
+                        chave = f"{moeda}_{round(d['poc_alvo']['preco'], 4)}"
+                        if chave not in alertas_enviados:
+                            enviar_telegram(formatar_mensagem(nome, d))
+                            alertas_enviados[chave] = datetime.now(timezone.utc)
+                            enviados += 1
+                            log(f"  ⭐ ALERTA: {nome} {d['direcao']}")
+                else:
+                    log(f"  {nome} | Sem POCs 1W Virgens (Todos tocados).")
 
             except Exception as e:
                 erros += 1
                 
-            time.sleep(SLEEP_ENTRE_MOEDAS)
+            time.sleep(SLEEP_ENTRE_MOEDAS) # Proteção anti-ban vital para Binance/Bybit
 
         log(f"✔️  Ronda terminada — ⭐{enviados} alertas, ❌{erros} erros")
 
@@ -332,7 +382,7 @@ def watchdog():
         time.sleep(60)
         if thread_radar is None or not thread_radar.is_alive():
             log("⚠️ Radar morreu — a relançar...")
-            enviar_telegram("⚠️ Radar relançado pelo watchdog.")
+            enviar_telegram("⚠️ Radar Macro relançado pelo watchdog.")
             thread_radar = threading.Thread(target=radar_poc, daemon=True)
             thread_radar.start()
 
@@ -341,7 +391,7 @@ def watchdog():
 # ==========================================
 @app.route('/')
 def home():
-    estado = "🟢 ATIVO" if thread_radar and thread_radar.is_alive() else "🔴 INATIVO"
+    estado = "🟢 ATIVO (Macro 1W Multi-Exchange)" if thread_radar and thread_radar.is_alive() else "🔴 INATIVO"
     return f"Sniper POC | Radar: {estado} | Moedas: {len(moedas_validadas)}"
 
 # ==========================================
