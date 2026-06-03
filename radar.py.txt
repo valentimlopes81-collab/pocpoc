@@ -170,9 +170,9 @@ def check_divergencia_bearish(velas, rsis):
 # 5. O CÉREBRO INSTITUCIONAL (1W POCS)
 # ==========================================
 def fetch_fusion_1d(moeda_bybit):
-    """Busca 1000 dias e funde o volume da Bybit e Binance."""
+    """Busca histórico e funde o volume da Bybit e Binance."""
     base_coin = moeda_bybit.split('/')[0].replace('1000', '')
-    velas_by = bybit.fetch_ohlcv(moeda_bybit, '1d', limit=1000)
+    velas_by = bybit.fetch_ohlcv(moeda_bybit, '1d', limit=400) # Cerca de 1 ano chega perfeitamente
     
     sym_bin_1 = f"{base_coin}/USDT:USDT"
     sym_bin_2 = f"1000{base_coin}/USDT:USDT"
@@ -181,9 +181,9 @@ def fetch_fusion_1d(moeda_bybit):
     if binance.markets:
         try:
             if sym_bin_1 in binance.markets:
-                velas_bin = binance.fetch_ohlcv(sym_bin_1, '1d', limit=1000)
+                velas_bin = binance.fetch_ohlcv(sym_bin_1, '1d', limit=400)
             elif sym_bin_2 in binance.markets:
-                velas_bin = binance.fetch_ohlcv(sym_bin_2, '1d', limit=1000)
+                velas_bin = binance.fetch_ohlcv(sym_bin_2, '1d', limit=400)
         except: pass
 
     vol_bin_dict = {v[0]: v[5] for v in velas_bin}
@@ -195,7 +195,7 @@ def fetch_fusion_1d(moeda_bybit):
     return fusion
 
 def calc_macro_pocs(velas_1d):
-    """Agrupa em Semanas e devolve APENAS os POCs que estão Virgens."""
+    """Agrupa em Semanas e devolve todos os POCs recentes."""
     semanas = {}
     for v in velas_1d:
         ts = v[0]
@@ -211,36 +211,77 @@ def calc_macro_pocs(velas_1d):
         for d in dias:
             if d[5] > max_vol:
                 max_vol = d[5]
-                poc_price = d[4] # Close do dia com mais volume
-        pocs_1w.append({'poc': poc_price, 'ts_end': dias[-1][0]})
+                poc_price = d[4] # Close do dia com mais volume = POC Aproximado
+        pocs_1w.append(poc_price)
 
     if len(pocs_1w) > 0:
-        pocs_1w = pocs_1w[:-1] # Remove a semana em formação
+        pocs_1w = pocs_1w[:-1] # Remove a semana atual (ainda em formação)
 
-    naked_pocs = []
-    for p in pocs_1w:
-        poc = p['poc']
-        ts_end = p['ts_end']
-        is_naked = True
-        # Verifica se alguma vela diária tocou no nível APÓS a sua criação
-        for v in velas_1d:
-            if v[0] > ts_end:
-                if v[3] <= poc <= v[2]: # Low <= POC <= High (Tocado)
-                    is_naked = False
-                    break
-        if is_naked:
-            naked_pocs.append(poc)
+    # Mantemos todos os POCs em memória (o TradingView faz isto)
+    return pocs_1w
 
-    return naked_pocs
-
-def classificar_pocs(naked_pocs):
-    """Classifica se o Naked POC é Base Forte (Aglomerado) ou Vácuo (Solo)"""
+def classificar_pocs(pocs_1w):
+    """Classifica se o POC tem vizinhos próximos (Aglomerado) ou está isolado (Solo)"""
     classificados = []
-    for p in naked_pocs:
-        vizinhos = sum(1 for outro in naked_pocs if outro != p and abs(outro - p)/p*100 <= CONFLUENCIA_PCT)
+    for p in pocs_1w:
+        # Conta quantos outros POCs estão a menos de 1% de distância
+        vizinhos = sum(1 for outro in pocs_1w if outro != p and abs(outro - p)/p*100 <= CONFLUENCIA_PCT)
         tipo = "AGLOMERADO (Base Forte)" if vizinhos > 0 else "SOLO (Vácuo)"
         classificados.append({'preco': p, 'tipo': tipo, 'vizinhos': vizinhos})
     return classificados
+
+# ==========================================
+# 6. ANÁLISE POR MOEDA
+# ==========================================
+def analisar(moeda):
+    velas_fusion = fetch_fusion_1d(moeda)
+    todos_pocs = calc_macro_pocs(velas_fusion)
+    pocs_classificados = classificar_pocs(todos_pocs)
+
+    # Buscar velas de 30m para calcular divergências e testar liquidez recente
+    velas_30m = bybit.fetch_ohlcv(moeda, '30m', limit=100)
+    if not velas_30m: return None
+    preco_atual = velas_30m[-1][4]
+
+    # Encontra o POC mais próximo do preço atual (O íman)
+    poc_alvo = None
+    menor_dist = 999.0
+    for p in pocs_classificados:
+        dist = abs(preco_atual - p['preco']) / preco_atual * 100
+        if dist < menor_dist:
+            menor_dist = dist
+            poc_alvo = p
+
+    if not poc_alvo: return None
+
+    # REGRA DO PAPEL: "Não pode ter tocado nas últimas horas/dias" (Últimas 48 horas)
+    zona_top = poc_alvo['preco'] * (1 + 0.0015)
+    zona_btm = poc_alvo['preco'] * (1 - 0.0015)
+    is_virgem = all(
+        not (v[3] <= zona_top and v[2] >= zona_btm)
+        for v in velas_30m[-96:-2]
+    )
+
+    # Deteção de Divergência
+    fechos_30m = [v[4] for v in velas_30m]
+    rsis_30m   = calc_rsi_array(fechos_30m, 14)
+    rsi_atual  = rsis_30m[-1]
+    
+    bull_div   = check_divergencia_bullish(velas_30m, rsis_30m)
+    bear_div   = check_divergencia_bearish(velas_30m, rsis_30m)
+
+    direcao = "LONG" if preco_atual > poc_alvo['preco'] else "SHORT"
+    div_ok = (direcao == "LONG" and bull_div) or (direcao == "SHORT" and bear_div)
+
+    return {
+        'preco_atual': preco_atual,
+        'poc_alvo': poc_alvo,
+        'dist_pct': menor_dist,
+        'is_virgem': is_virgem, # Adicionado de volta para bloquear POCs mastigados
+        'rsi_atual': rsi_atual,
+        'div_ok': div_ok,
+        'direcao': direcao
+    }
 
 # ==========================================
 # 6. ANÁLISE POR MOEDA
