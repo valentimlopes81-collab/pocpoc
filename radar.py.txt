@@ -110,14 +110,14 @@ def segundos_para_proxima_vela():
     return espera
 
 # ==========================================
-# 5. MOTORES MATEMÁTICOS (CORRIGIDOS)
+# 5. MOTORES MATEMÁTICOS (CORRIGIDOS DINÂMICOS)
 # ==========================================
 def calc_rsi_array(fechos, periodos=14):
     rsis = [50.0] * len(fechos)
     if len(fechos) <= periodos:
         return rsis
 
-    # Cálculo perfeito e sem desfasamento do RSI
+    # Cálculo perfeito e sem desfasamento do RSI (RMA)
     ganhos = [max(fechos[i] - fechos[i-1], 0) for i in range(1, len(fechos))]
     perdas = [max(fechos[i-1] - fechos[i], 0) for i in range(1, len(fechos))]
 
@@ -134,36 +134,63 @@ def calc_rsi_array(fechos, periodos=14):
     return rsis
 
 def check_divergencia_bullish(velas, rsis):
-    if len(velas) < 30: return False
-    lows_rec = [v[3] for v in velas[-5:]]
-    lows_pas = [v[3] for v in velas[-30:-5]]
-    rsis_rec = rsis[-5:]
-    rsis_pas = rsis[-30:-5]
+    if len(velas) < 40: return False
     
-    r_low = min(lows_rec)
-    rsi_r = rsis_rec[lows_rec.index(r_low)]
+    # Isolar wicks (Lows) e RSIs correspondentes das últimas 40 velas
+    lows = [v[3] for v in velas[-40:]]
+    rsis_cortados = rsis[-40:]
     
-    p_low = min(lows_pas)
-    rsi_p = rsis_pas[lows_pas.index(p_low)]
+    # 1. Encontrar o fundo estrutural RECENTE (pesquisa orgânica nas últimas 8 velas)
+    recent_window = 8
+    r_low = min(lows[-recent_window:])
     
-    # Ajustei para <= 40 para apanhar mais movimentos de exaustão no 30m
-    return (r_low < p_low) and (rsi_r > rsi_p) and (rsi_r <= 40)
+    # Localizar o índice exato desse wick recente
+    idx_r_low = len(lows) - recent_window + lows[-recent_window:].index(r_low)
+    rsi_r = rsis_cortados[idx_r_low]
+    
+    # Se no momento do wick o RSI não estava esmagado, abortar
+    if rsi_r > 40: return False
+    
+    # 2. Encontrar o fundo estrutural PASSADO
+    # Garantir um gap de pelo menos 3 velas para confirmar que é um pivot diferente
+    if idx_r_low < 5: return False 
+    
+    past_lows = lows[:idx_r_low - 3]
+    if not past_lows: return False
+    
+    p_low = min(past_lows)
+    idx_p_low = past_lows.index(p_low)
+    rsi_p = rsis_cortados[idx_p_low]
+    
+    # 3. Matemática Pura: Wick mais baixo, RSI mais alto
+    return (r_low < p_low) and (rsi_r > rsi_p)
 
 def check_divergencia_bearish(velas, rsis):
-    if len(velas) < 30: return False
-    highs_rec = [v[2] for v in velas[-5:]]
-    highs_pas = [v[2] for v in velas[-30:-5]]
-    rsis_rec  = rsis[-5:]
-    rsis_pas  = rsis[-30:-5]
+    if len(velas) < 40: return False
     
-    r_high = max(highs_rec)
-    rsi_r = rsis_rec[highs_rec.index(r_high)]
+    # Isolar wicks (Highs) e RSIs correspondentes
+    highs = [v[2] for v in velas[-40:]]
+    rsis_cortados = rsis[-40:]
     
-    p_high = max(highs_pas)
-    rsi_p = rsis_pas[highs_pas.index(p_high)]
+    recent_window = 8
+    r_high = max(highs[-recent_window:])
     
-    # Ajustei para >= 60
-    return (r_high > p_high) and (rsi_r < rsi_p) and (rsi_r >= 60)
+    idx_r_high = len(highs) - recent_window + highs[-recent_window:].index(r_high)
+    rsi_r = rsis_cortados[idx_r_high]
+    
+    if rsi_r < 60: return False
+    
+    if idx_r_high < 5: return False
+    
+    past_highs = highs[:idx_r_high - 3]
+    if not past_highs: return False
+    
+    p_high = max(past_highs)
+    idx_p_high = past_highs.index(p_high)
+    rsi_p = rsis_cortados[idx_p_high]
+    
+    # Wick mais alto, RSI mais baixo
+    return (r_high > p_high) and (rsi_r < rsi_p)
 
 def calc_poc(velas):
     poc, vol_max = 0.0, 0.0
